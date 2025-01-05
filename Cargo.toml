@@ -9,3 +9,12 @@ rust-version = "1.80"
 anyhow = "1.0.68"                                # error handling
 bytes = "1.3.0"                                  # helps manage buffers
 thiserror = "1.0.38"                             # error handling
+
+[lints.clippy]
+# Warn
+# suspicious, complexity, perf & style groups are warn-by-default
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+# Allow
+map_unwrap_or = "allow"            # This reduces readability; track https://github.com/rust-lang/rust-clippy/issues/10428
+
