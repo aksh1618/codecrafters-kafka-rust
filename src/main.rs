@@ -1,8 +1,5 @@
 #![allow(unused_imports)]
-use std::{
-    io::{BufReader, Read},
-    net::TcpListener,
-};
+use std::net::TcpListener;
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -12,15 +9,8 @@ fn main() {
 
     for stream in listener.incoming() {
         match stream {
-            Ok(mut _stream) => {
-                // let f = BufReader::new(_stream);
+            Ok(_stream) => {
                 println!("accepted new connection");
-                let mut content = String::new();
-                let bytes_read = _stream.read_to_string(&mut content).unwrap();
-                // let bytes = f.bytes().collect::<Result<Vec<_>, _>>().unwrap();
-                // print!("{}", String::from_utf8(bytes).unwrap());
-                println!("Received {} bytes in request:", bytes_read);
-                println!("{}", content);
             }
             Err(e) => {
                 println!("error: {}", e);
