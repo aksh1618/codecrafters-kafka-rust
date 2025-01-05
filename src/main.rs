@@ -43,22 +43,24 @@ fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<Bytes> {
     let mut buf = BytesMut::zeroed(12);
     stream.read_exact(&mut buf)?;
     println!("read 12 bytes");
-    let remaining_bytes_read = consume_bytes(stream)?;
-    println!("read remaining {remaining_bytes_read} bytes");
-    return Ok(buf.freeze().slice(8..));
-}
-
-fn consume_bytes(stream: &mut TcpStream) -> Result<usize> {
-    let mut buf = vec![];
-    let mut total_bytes_read = 0;
-    loop {
-        let n = stream.read(&mut buf)?;
-        total_bytes_read += n;
-        if n == 0 {
-            break;
-        }
-    }
-    Ok(total_bytes_read)
+    let mut bytes = buf.freeze();
+    let message_size = bytes.split_to(4);
+    let message_size = i32::from_be_bytes(
+        message_size
+            .as_ref()
+            .try_into()
+            .expect("message size should be 4 bytes"),
+    );
+    let message_size: usize = message_size
+        .try_into()
+        .expect("message size shouldn't be negative");
+    println!("message size: {message_size}");
+    let correlation_id = bytes.slice(4..);
+    let remaining_bytes = message_size - 8;
+    let mut discardable = BytesMut::zeroed(remaining_bytes);
+    stream.read_exact(discardable.as_mut())?;
+    println!("read remaining {remaining_bytes} bytes");
+    Ok(correlation_id)
 }
 
 #[cfg(test)]
@@ -91,18 +93,20 @@ mod tests {
         let output = Command::new("sh")
             .arg("-c")
             .arg("echo -n '00000023001200046f7fc66100096b61666b612d636c69000a6b61666b612d636c6904302e3100' | xxd -r -p | nc localhost 9092 | hexdump -C")
-            .output()?
-            .stdout;
-        let output = String::from_utf8_lossy(&output);
-
+            .output()?;
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!("{stdout:?}");
+        println!("{stderr:?}");
+        assert!(stderr.is_empty());
         assert_eq!(
-            output,
+            stdout,
             indoc! {"
              00000000  00 00 00 00 6f 7f c6 61                           |....o..a|
              00000008
             "}
         );
-        println!("{output:?}");
         Ok(())
     }
 
@@ -113,7 +117,7 @@ mod tests {
         const CORRELATION_ID: i32 = 1234567890i32;
         ensure_server_running();
         let mut stream = std::net::TcpStream::connect(ADDR)?;
-        stream.write_all(0i32.to_be_bytes().as_slice())?;
+        stream.write_all(10i32.to_be_bytes().as_slice())?;
         stream.write_all(0i16.to_be_bytes().as_slice())?;
         stream.write_all(0i16.to_be_bytes().as_slice())?;
         stream.write_all(CORRELATION_ID.to_be_bytes().as_slice())?;
