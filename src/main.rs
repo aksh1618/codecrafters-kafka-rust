@@ -55,16 +55,18 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-macro_rules! let_cosuming_next_bytes {
-    ($($var:ident: $T:ty = $bytes: expr);+ ;) => {
+macro_rules! let_consuming_bytes {
+    ($bytes:expr => {
+        $($var:ident : $Integer:ty;)*
+    }) => {
         $(
         let $var = {
-            let size = std::mem::size_of::<$T>();
+            let size = std::mem::size_of::<$Integer>();
             $bytes
                 .split_to(size)
                 .as_ref()
                 .try_into()
-                .map(<$T>::from_be_bytes)
+                .map(<$Integer>::from_be_bytes)
                 .unwrap_or_else(|e| {
                     panic!(
                         "expected to read & parse {size} bytes for {}: {e}",
@@ -83,11 +85,11 @@ fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<RequestMessa
     stream.read_exact(&mut buf)?;
     println!("read 12 bytes");
     let mut bytes = buf.freeze();
-    let_cosuming_next_bytes! {
-        message_size: i32 = bytes;
-        api_key: i16 = bytes;
-        api_version: i16 = bytes;
-    }
+    let_consuming_bytes!(bytes => {
+        message_size: i32;
+        api_key: i16;
+        api_version: i16;
+    });
     println!("message size: {message_size}");
     let correlation_id = bytes.split_to(4);
     // We don't care about rest of the message for now
