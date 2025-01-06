@@ -55,6 +55,25 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
+macro_rules! let_consuming {
+    ($var:ident: $T:ty = $bytes: expr) => {
+        let $var = {
+            let size = std::mem::size_of::<$T>();
+            $bytes
+                .split_to(size)
+                .as_ref()
+                .try_into()
+                .map(<$T>::from_be_bytes)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "expected to read & parse {size} bytes for {}: {e}",
+                        stringify!($var)
+                    )
+                })
+        };
+    };
+}
+
 fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<RequestMessage> {
     // 12 bytes: 4 message size | 2 api key | 2 api version | 4 correlation id
     // See: https://kafka.apache.org/protocol.html
@@ -62,25 +81,10 @@ fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<RequestMessa
     stream.read_exact(&mut buf)?;
     println!("read 12 bytes");
     let mut bytes = buf.freeze();
-    let message_size = bytes
-        .split_to(4)
-        .as_ref()
-        .try_into()
-        .map(i32::from_be_bytes)
-        .expect("message size should be 4 bytes");
+    let_consuming!(message_size: i32 = bytes);
     println!("message size: {message_size}");
-    let api_key = bytes
-        .split_to(2)
-        .as_ref()
-        .try_into()
-        .map(i16::from_be_bytes)
-        .expect("api key should be 2 bytes");
-    let api_version = bytes
-        .split_to(2)
-        .as_ref()
-        .try_into()
-        .map(i16::from_be_bytes)
-        .expect("api key should be 2 bytes");
+    let_consuming!(api_key: i16 = bytes);
+    let_consuming!(api_version: i16 = bytes);
     let correlation_id = bytes.split_to(4);
     // We don't care about rest of the message for now
     let remaining_bytes = (message_size - 8)
