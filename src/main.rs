@@ -7,6 +7,14 @@ use bytes::{Bytes, BytesMut};
 
 const ADDR: &str = "127.0.0.1:9092";
 
+#[derive(Debug)]
+struct RequestMessage {
+    correlation_id: Bytes,
+    #[allow(dead_code)]
+    api_key: i16,
+    api_version: i16,
+}
+
 fn main() -> Result<()> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
@@ -30,14 +38,24 @@ fn start_server() -> Result<()> {
 }
 
 fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
-    let request_correlation_id = read_correlation_id_request_v2(&mut stream)?;
+    let RequestMessage {
+        correlation_id,
+        api_version,
+        ..
+    } = read_correlation_id_request_v2(&mut stream)?;
+    let error_code = if (0..=4).contains(&api_version) {
+        0i16
+    } else {
+        35i16
+    };
     stream.write_all(0i32.to_be_bytes().as_slice())?;
-    stream.write_all(request_correlation_id.as_ref())?;
+    stream.write_all(correlation_id.as_ref())?;
+    stream.write_all(error_code.to_be_bytes().as_slice())?;
     stream.flush()?;
     Ok(())
 }
 
-fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<Bytes> {
+fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<RequestMessage> {
     // 12 bytes: 4 message size | 2 api key | 2 api version | 4 correlation id
     // See: https://kafka.apache.org/protocol.html
     let mut buf = BytesMut::zeroed(12);
@@ -51,14 +69,33 @@ fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<Bytes> {
         .map(i32::from_be_bytes)
         .expect("message size should be 4 bytes");
     println!("message size: {message_size}");
-    let correlation_id = bytes.slice(4..);
+    let api_key = bytes
+        .split_to(2)
+        .as_ref()
+        .try_into()
+        .map(i16::from_be_bytes)
+        .expect("api key should be 2 bytes");
+    let api_version = bytes
+        .split_to(2)
+        .as_ref()
+        .try_into()
+        .map(i16::from_be_bytes)
+        .expect("api key should be 2 bytes");
+    let correlation_id = bytes.split_to(4);
+    // We don't care about rest of the message for now
     let remaining_bytes = (message_size - 8)
         .try_into()
         .expect("message size shouldn't be negative");
     let mut discardable = BytesMut::zeroed(remaining_bytes);
     stream.read_exact(discardable.as_mut())?;
     println!("read remaining {remaining_bytes} bytes");
-    Ok(correlation_id)
+    let request_message = RequestMessage {
+        correlation_id,
+        api_key,
+        api_version,
+    };
+    println!("Parsed request message: {request_message:?}");
+    Ok(request_message)
 }
 
 #[cfg(test)]
@@ -86,6 +123,29 @@ mod tests {
     }
 
     #[test]
+    fn test_cmd_request_v2_response_v0_correlation_id_incorrect_version_id() -> Result<()> {
+        ensure_server_running();
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg("echo -n '000000230012674a4f74d28b00096b61666b612d636c69000a6b61666b612d636c6904302e3100' | xxd -r -p | nc localhost 9092 | hexdump -C")
+            .output()?;
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!("{stdout:?}");
+        println!("{stderr:?}");
+        assert!(stderr.is_empty());
+        assert_eq!(
+            stdout,
+            indoc! {"
+                00000000  00 00 00 00 4f 74 d2 8b  00 23                    |....Ot...#|
+                0000000a
+            "}
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_cmd_request_v2_response_v0_correlation_id() -> Result<()> {
         ensure_server_running();
         let output = Command::new("sh")
@@ -101,8 +161,8 @@ mod tests {
         assert_eq!(
             stdout,
             indoc! {"
-             00000000  00 00 00 00 6f 7f c6 61                           |....o..a|
-             00000008
+                00000000  00 00 00 00 6f 7f c6 61  00 00                    |....o..a..|
+                0000000a
             "}
         );
         Ok(())
