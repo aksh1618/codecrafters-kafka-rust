@@ -44,19 +44,17 @@ fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<Bytes> {
     stream.read_exact(&mut buf)?;
     println!("read 12 bytes");
     let mut bytes = buf.freeze();
-    let message_size = bytes.split_to(4);
-    let message_size = i32::from_be_bytes(
-        message_size
-            .as_ref()
-            .try_into()
-            .expect("message size should be 4 bytes"),
-    );
-    let message_size: usize = message_size
+    let message_size = bytes
+        .split_to(4)
+        .as_ref()
         .try_into()
-        .expect("message size shouldn't be negative");
+        .map(i32::from_be_bytes)
+        .expect("message size should be 4 bytes");
     println!("message size: {message_size}");
     let correlation_id = bytes.slice(4..);
-    let remaining_bytes = message_size - 8;
+    let remaining_bytes = (message_size - 8)
+        .try_into()
+        .expect("message size shouldn't be negative");
     let mut discardable = BytesMut::zeroed(remaining_bytes);
     stream.read_exact(discardable.as_mut())?;
     println!("read remaining {remaining_bytes} bytes");
