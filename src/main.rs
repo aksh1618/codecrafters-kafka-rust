@@ -3,13 +3,13 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, BufMut};
 
 const ADDR: &str = "127.0.0.1:9092";
 
 #[derive(Debug)]
 struct RequestMessage {
-    correlation_id: Bytes,
+    correlation_id: i32,
     #[allow(dead_code)]
     api_key: i16,
     api_version: i16,
@@ -48,56 +48,32 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
     } else {
         35i16
     };
-    stream.write_all(0i32.to_be_bytes().as_slice())?;
-    stream.write_all(correlation_id.as_ref())?;
-    stream.write_all(error_code.to_be_bytes().as_slice())?;
-    stream.flush()?;
-    Ok(())
-}
-
-macro_rules! let_consuming_bytes {
-    ($bytes:expr => {
-        $($var:ident : $Integer:ty;)*
-    }) => {
-        $(
-        let $var = {
-            let size = std::mem::size_of::<$Integer>();
-            $bytes
-                .split_to(size)
-                .as_ref()
-                .try_into()
-                .map(<$Integer>::from_be_bytes)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "expected to read & parse {size} bytes for {}: {e}",
-                        stringify!($var)
-                    )
-                })
-        };
-        )*
-    };
+    let mut buf = vec![];
+    buf.put_i32(0i32);
+    buf.put_i32(correlation_id);
+    buf.put_i16(error_code);
+    stream.write_all(&buf)?;
+    stream.flush()
 }
 
 fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<RequestMessage> {
     // 12 bytes: 4 message size | 2 api key | 2 api version | 4 correlation id
     // See: https://kafka.apache.org/protocol.html
-    let mut buf = BytesMut::zeroed(12);
+    let mut buf = [0u8; 12];
     stream.read_exact(&mut buf)?;
     println!("read 12 bytes");
-    let mut bytes = buf.freeze();
-    let_consuming_bytes!(bytes => {
-        message_size: i32;
-        api_key: i16;
-        api_version: i16;
-    });
+    let mut bytes = buf.as_slice();
+    let message_size = bytes.get_i32();
     println!("message size: {message_size}");
-    let correlation_id = bytes.split_to(4);
+    let api_key = bytes.get_i16();
+    let api_version = bytes.get_i16();
+    let correlation_id = bytes.get_i32();
     // We don't care about rest of the message for now
     let remaining_bytes = (message_size - 8)
         .try_into()
         .expect("message size shouldn't be negative");
-    let mut discardable = BytesMut::zeroed(remaining_bytes);
-    stream.read_exact(discardable.as_mut())?;
+    let mut discardable = vec![0u8; remaining_bytes];
+    stream.read_exact(&mut discardable)?;
     println!("read remaining {remaining_bytes} bytes");
     let request_message = RequestMessage {
         correlation_id,
@@ -185,25 +161,22 @@ mod tests {
         const CORRELATION_ID: i32 = 1234567890i32;
         ensure_server_running();
         let mut stream = std::net::TcpStream::connect(ADDR)?;
-        stream.write_all(10i32.to_be_bytes().as_slice())?;
-        stream.write_all(0i16.to_be_bytes().as_slice())?;
-        stream.write_all(0i16.to_be_bytes().as_slice())?;
-        stream.write_all(CORRELATION_ID.to_be_bytes().as_slice())?;
-        stream.write_all((-1_i16).to_be_bytes().as_slice())?;
-        stream.write_all(0i8.to_be_bytes().as_slice())?;
+        let mut buf = vec![];
+        buf.put_i32(10i32);
+        buf.put_i16(0i16);
+        buf.put_i16(0i16);
+        buf.put_i32(CORRELATION_ID);
+        buf.put_i16(-1i16);
+        buf.put_i8(0i8);
+        stream.write_all(&buf)?;
         stream.flush()?;
         println!("Wrote and flushed all bytes");
-        let mut res_bytes = stream.bytes();
-        let message_size_bytes = 0i32.to_be_bytes();
-        for byte in message_size_bytes {
-            println!("Received byte: {byte}");
-            assert!(matches!(res_bytes.next(), Some(Ok(res_byte)) if res_byte == byte));
-        }
-        let header_bytes = CORRELATION_ID.to_be_bytes();
-        for byte in header_bytes {
-            println!("Received byte: {byte}");
-            assert!(matches!(res_bytes.next(), Some(Ok(res_byte)) if res_byte == byte));
-        }
+        let mut buf = [0u8; 8];
+        stream.read_exact(&mut buf)?;
+        let mut bytes = buf.as_slice();
+        let _message_size = bytes.get_i32();
+        let correlation_id = bytes.get_i32();
+        assert_eq!(correlation_id, CORRELATION_ID);
         Ok(())
     }
 }
