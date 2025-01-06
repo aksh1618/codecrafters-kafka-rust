@@ -1,6 +1,7 @@
 use std::{
     io::{Read, Result, Write},
     net::{TcpListener, TcpStream},
+    thread,
 };
 
 use bytes::{Buf, BufMut};
@@ -23,17 +24,13 @@ fn main() -> Result<()> {
 
 fn start_server() -> Result<()> {
     let listener = TcpListener::bind(ADDR)?;
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                println!("accepted new connection");
-                handle_connection_response_v0(stream)?;
-            }
-            Err(e) => {
-                println!("error: {e}");
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            if let Err(e) = stream.map(handle_connection_response_v0) {
+                println!("Encountered error: {e}");
             }
         }
-    }
+    });
     Ok(())
 }
 
@@ -89,23 +86,26 @@ mod tests {
     use indoc::indoc;
 
     use super::*;
-    use std::sync::Once;
+    use std::sync::{Mutex, Once};
     use std::{
         io::{Read, Result},
         process::Command,
-        thread,
     };
 
     static INIT: Once = Once::new();
+    static INIT_RESULT: Mutex<Option<Result<()>>> = Mutex::new(None);
 
     pub fn ensure_server_running() {
         INIT.call_once(|| {
-            thread::spawn(|| {
-                start_server().unwrap_or_else(|e| {
-                    panic!("Should be able to start the server on {ADDR}: {e}")
-                });
-            });
+            let result = start_server();
+            *INIT_RESULT.lock().expect("lock") = Some(result);
         });
+        #[allow(clippy::unwrap_used)]
+        let successfully_started = INIT_RESULT.lock().unwrap().as_ref().unwrap().is_ok();
+        assert!(
+            successfully_started,
+            "Server initialization panicked: {successfully_started:?}"
+        );
     }
 
     #[test]
