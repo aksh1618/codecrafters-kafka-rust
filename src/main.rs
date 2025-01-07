@@ -1,3 +1,8 @@
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 use std::{
     io::{Read, Result, Write},
     net::{TcpListener, TcpStream},
@@ -39,21 +44,28 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
         correlation_id,
         api_version,
         ..
-    } = read_correlation_id_request_v2(&mut stream)?;
+    } = read_request_v2(&mut stream)?;
     let error_code = if (0..=4).contains(&api_version) {
         0i16
     } else {
         35i16
     };
+    let api_versions_api_key = 18i16;
+    let api_versions_min_version = 0i16;
+    let api_versions_max_version = 4i16;
     let mut buf = vec![];
-    buf.put_i32(0i32);
     buf.put_i32(correlation_id);
     buf.put_i16(error_code);
+    buf.put_i16(api_versions_api_key);
+    buf.put_i16(api_versions_min_version);
+    buf.put_i16(api_versions_max_version);
+    let message_size = buf.len();
+    stream.write_all((message_size as i32).to_be_bytes().as_slice())?;
     stream.write_all(&buf)?;
     stream.flush()
 }
 
-fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<RequestMessage> {
+fn read_request_v2(stream: &mut TcpStream) -> Result<RequestMessage> {
     // 12 bytes: 4 message size | 2 api key | 2 api version | 4 correlation id
     // See: https://kafka.apache.org/protocol.html
     let mut buf = [0u8; 12];
@@ -61,7 +73,7 @@ fn read_correlation_id_request_v2(stream: &mut TcpStream) -> Result<RequestMessa
     println!("read 12 bytes");
     let mut bytes = buf.as_slice();
     let message_size = bytes.get_i32();
-    println!("message size: {message_size}");
+    println!("request message size: {message_size}");
     let api_key = bytes.get_i16();
     let api_version = bytes.get_i16();
     let correlation_id = bytes.get_i32();
@@ -124,8 +136,8 @@ mod tests {
         assert_eq!(
             stdout,
             indoc! {"
-                00000000  00 00 00 00 4f 74 d2 8b  00 23                    |....Ot...#|
-                0000000a
+                00000000  00 00 00 0c 4f 74 d2 8b  00 23 00 12 00 00 00 04  |....Ot...#......|
+                00000010
             "}
         );
         Ok(())
@@ -147,36 +159,75 @@ mod tests {
         assert_eq!(
             stdout,
             indoc! {"
-                00000000  00 00 00 00 6f 7f c6 61  00 00                    |....o..a..|
-                0000000a
+                00000000  00 00 00 0c 6f 7f c6 61  00 00 00 12 00 00 00 04  |....o..a........|
+                00000010
             "}
         );
         Ok(())
     }
 
     #[test]
-    fn test_request_v2_response_v0_correlation_id() -> Result<()> {
+    fn test_request_header_v2_response_header_v0_correlation_id() -> Result<()> {
         #[allow(clippy::unreadable_literal)]
         // const CORRELATION_ID: i32 = 1870644833i32;
         const CORRELATION_ID: i32 = 1234567890i32;
         ensure_server_running();
         let mut stream = std::net::TcpStream::connect(ADDR)?;
         let mut buf = vec![];
-        buf.put_i32(10i32);
         buf.put_i16(0i16);
         buf.put_i16(0i16);
         buf.put_i32(CORRELATION_ID);
         buf.put_i16(-1i16);
         buf.put_i8(0i8);
+        stream.write_all((buf.len() as i32).to_be_bytes().as_slice())?;
         stream.write_all(&buf)?;
         stream.flush()?;
-        println!("Wrote and flushed all bytes");
+        println!("Wrote and flushed all request bytes");
         let mut buf = [0u8; 8];
         stream.read_exact(&mut buf)?;
         let mut bytes = buf.as_slice();
         let _message_size = bytes.get_i32();
         let correlation_id = bytes.get_i32();
         assert_eq!(correlation_id, CORRELATION_ID);
+        Ok(())
+    }
+
+    #[test]
+    fn test_apiversions_request_v4_response() -> Result<()> {
+        #[allow(clippy::unreadable_literal)]
+        const CORRELATION_ID: i32 = 1857043921i32;
+        ensure_server_running();
+        let mut stream = std::net::TcpStream::connect(ADDR)?;
+        let mut buf = vec![];
+        buf.put_i16(18i16);
+        buf.put_i16(4i16);
+        buf.put_i32(CORRELATION_ID);
+        buf.put_i16(-1i16);
+        buf.put_i8(0i8);
+        stream.write_all((buf.len() as i32).to_be_bytes().as_slice())?;
+        stream.write_all(&buf)?;
+        stream.flush()?;
+        println!("Wrote and flushed all request bytes");
+
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf)?;
+        let mut bytes = buf.as_slice();
+        let message_size = bytes.get_i32();
+        println!("Received response message size: {message_size}");
+        let remaining_bytes = message_size as usize;
+        let mut buf = vec![0u8; remaining_bytes];
+        stream.read_exact(&mut buf)?;
+        let mut bytes = buf.as_slice();
+        let correlation_id = bytes.get_i32();
+        assert_eq!(correlation_id, CORRELATION_ID);
+        let error_code = bytes.get_i16();
+        assert_eq!(error_code, 0i16);
+        let api_versions_api_key = bytes.get_i16();
+        assert_eq!(api_versions_api_key, 18i16);
+        let api_versions_min_version = bytes.get_i16();
+        assert_eq!(api_versions_min_version, 0i16);
+        let api_versions_max_version = bytes.get_i16();
+        assert_eq!(api_versions_max_version, 4i16);
         Ok(())
     }
 }
