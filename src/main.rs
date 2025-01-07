@@ -53,15 +53,22 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
     } else {
         35i16
     };
-    let api_versions_api_key = 18i16;
-    let api_versions_min_version = 0i16;
-    let api_versions_max_version = 4i16;
+    let num_api_keys = 1i32;
+    let apiversions_api_key = 18i16;
+    let apiversions_min_version = 0i16;
+    let apiversions_max_version = 4i16;
+    let throttle_time_ms = 0i32;
+    let tag_buffer = 0i8;
     let mut buf = vec![];
     buf.put_i32(correlation_id);
     buf.put_i16(error_code);
-    buf.put_i16(api_versions_api_key);
-    buf.put_i16(api_versions_min_version);
-    buf.put_i16(api_versions_max_version);
+    buf.put_i32(num_api_keys);
+    buf.put_i16(apiversions_api_key);
+    buf.put_i16(apiversions_min_version);
+    buf.put_i16(apiversions_max_version);
+    buf.put_i8(tag_buffer);
+    buf.put_i32(throttle_time_ms);
+    buf.put_i8(tag_buffer);
     let message_size = buf.len();
     stream.write_all((message_size as i32).to_be_bytes().as_slice())?;
     stream.write_all(&buf)?;
@@ -141,8 +148,9 @@ mod tests {
         assert_eq!(
             stdout,
             indoc! {"
-                00000000  00 00 00 0c 4f 74 d2 8b  00 23 00 12 00 00 00 04  |....Ot...#......|
-                00000010
+                00000000  00 00 00 16 4f 74 d2 8b  00 23 00 00 00 01 00 12  |....Ot...#......|
+                00000010  00 00 00 04 00 00 00 00  00 00                    |..........|
+                0000001a
             "}
         );
         Ok(())
@@ -164,8 +172,9 @@ mod tests {
         assert_eq!(
             stdout,
             indoc! {"
-                00000000  00 00 00 0c 6f 7f c6 61  00 00 00 12 00 00 00 04  |....o..a........|
-                00000010
+                00000000  00 00 00 16 6f 7f c6 61  00 00 00 00 00 01 00 12  |....o..a........|
+                00000010  00 00 00 04 00 00 00 00  00 00                    |..........|
+                0000001a
             "}
         );
         Ok(())
@@ -198,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apiversions_request_v4_response() -> Result<()> {
+    fn test_apiversions_v4_request_response() -> Result<()> {
         #[allow(clippy::unreadable_literal)]
         const CORRELATION_ID: i32 = 1857043921i32;
         ensure_server_running();
@@ -227,12 +236,21 @@ mod tests {
         assert_eq!(correlation_id, CORRELATION_ID);
         let error_code = bytes.get_i16();
         assert_eq!(error_code, 0i16);
-        let api_versions_api_key = bytes.get_i16();
-        assert_eq!(api_versions_api_key, 18i16);
-        let api_versions_min_version = bytes.get_i16();
-        assert_eq!(api_versions_min_version, 0i16);
-        let api_versions_max_version = bytes.get_i16();
-        assert_eq!(api_versions_max_version, 4i16);
+        let num_api_keys = bytes.get_i32();
+        assert_eq!(num_api_keys, 1i32);
+        let apiversions_api_key = bytes.get_i16();
+        assert_eq!(apiversions_api_key, 18i16);
+        let apiversions_min_version = bytes.get_i16();
+        assert_eq!(apiversions_min_version, 0i16);
+        let apiversions_max_version = bytes.get_i16();
+        let tag_buffer = bytes.get_i8();
+        assert_eq!(tag_buffer, 0i8);
+        assert_eq!(apiversions_max_version, 4i16);
+        let throttle_time_ms = bytes.get_i32();
+        assert_eq!(throttle_time_ms, 0i32);
+        let tag_buffer = bytes.get_i8();
+        assert_eq!(tag_buffer, 0i8);
+        assert_eq!(bytes.len(), 0);
         Ok(())
     }
 }
