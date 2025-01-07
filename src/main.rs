@@ -53,16 +53,16 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
     } else {
         35i16
     };
-    let num_api_keys = 1i32;
+    let num_api_keys = 1u8;
     let apiversions_api_key = 18i16;
-    let apiversions_min_version = 0i16;
+    let apiversions_min_version = 4i16;
     let apiversions_max_version = 4i16;
     let throttle_time_ms = 0i32;
     let tag_buffer = 0i8;
     let mut buf = vec![];
     buf.put_i32(correlation_id);
     buf.put_i16(error_code);
-    buf.put_i32(num_api_keys);
+    buf.put_u8(num_api_keys);
     buf.put_i16(apiversions_api_key);
     buf.put_i16(apiversions_min_version);
     buf.put_i16(apiversions_max_version);
