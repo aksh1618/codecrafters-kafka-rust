@@ -6,7 +6,7 @@
 use std::{
     io::{Read, Result, Write},
     net::{TcpListener, TcpStream},
-    thread,
+    thread::{self, JoinHandle},
 };
 
 use bytes::{Buf, BufMut};
@@ -24,19 +24,22 @@ struct RequestMessage {
 fn main() -> Result<()> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
-    start_server()
+    start_server()?
+        .join()
+        .expect("should be able to join server request handling thread");
+    Ok(())
 }
 
-fn start_server() -> Result<()> {
+fn start_server() -> Result<JoinHandle<()>> {
     let listener = TcpListener::bind(ADDR)?;
-    thread::spawn(move || {
+    let handler_thread = thread::spawn(move || {
         for stream in listener.incoming() {
             if let Err(e) = stream.map(handle_connection_response_v0) {
                 println!("Encountered error: {e}");
             }
         }
     });
-    Ok(())
+    Ok(handler_thread)
 }
 
 fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
@@ -107,16 +110,18 @@ mod tests {
     static INIT: Once = Once::new();
     static INIT_RESULT: Mutex<Option<Result<()>>> = Mutex::new(None);
 
+    #[allow(clippy::unwrap_used)]
     pub fn ensure_server_running() {
         INIT.call_once(|| {
             let result = start_server();
-            *INIT_RESULT.lock().expect("lock") = Some(result);
+            *INIT_RESULT.lock().expect("lock") = Some(result.map(|_| ()));
         });
-        #[allow(clippy::unwrap_used)]
-        let successfully_started = INIT_RESULT.lock().unwrap().as_ref().unwrap().is_ok();
+        let lock = INIT_RESULT.lock().unwrap();
+        let server_start_result = lock.as_ref().unwrap();
+        let successfully_started = server_start_result.is_ok();
         assert!(
             successfully_started,
-            "Server initialization panicked: {successfully_started:?}"
+            "Server initialization panicked: {server_start_result:?}"
         );
     }
 
