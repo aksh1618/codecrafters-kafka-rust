@@ -133,6 +133,30 @@ mod tests {
     }
 
     #[test]
+    fn test_cmd_apiversions_v4_request_response() -> Result<()> {
+        ensure_server_running();
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg("echo -n '00000023001200043db96a2800096b61666b612d636c69000a6b61666b612d636c6904302e3100' | xxd -r -p | nc localhost 9092 | hexdump -C")
+            .output()?;
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!("{stdout:?}");
+        println!("{stderr:?}");
+        assert!(stderr.is_empty());
+        assert_eq!(
+            stdout,
+            indoc! {"
+                00000000  00 00 00 13 3d b9 6a 28  00 00 02 00 12 00 04 00  |....=.j(........|
+                00000010  04 00 00 00 00 00 00                              |.......|
+                00000017
+            "}
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_cmd_request_v2_response_v0_correlation_id_incorrect_version_id() -> Result<()> {
         ensure_server_running();
         let output = Command::new("sh")
