@@ -34,9 +34,11 @@ fn start_server() -> Result<JoinHandle<()>> {
     let listener = TcpListener::bind(ADDR)?;
     let handler_thread = thread::spawn(move || {
         for stream in listener.incoming() {
-            if let Err(e) = stream.map(handle_connection_response_v0) {
-                println!("Encountered error: {e}");
-            }
+            thread::spawn(move || {
+                if let Err(e) = stream.map(handle_connection_response_v0) {
+                    println!("Encountered error: {e}");
+                };
+            });
         }
     });
     Ok(handler_thread)
@@ -120,6 +122,7 @@ mod tests {
 
     use super::*;
     use std::sync::{Mutex, Once};
+    use std::time::Instant;
     use std::{
         io::{Read, Result},
         process::Command,
@@ -315,5 +318,49 @@ mod tests {
         test_apiversions_v4_request_response_for_correlation_id(&mut stream, CORRELATION_ID_2)?;
         test_apiversions_v4_request_response_for_correlation_id(&mut stream, CORRELATION_ID_3)?;
         Ok(())
+    }
+
+    // TODO: Improve this test, can be flaky
+    #[test]
+    #[allow(clippy::unreadable_literal)]
+    fn test_multiple_parallel_apiversions_v4_request_response() {
+        const CORRELATION_IDS: [i32; 5] = [
+            1956054920i32,
+            205506591i32,
+            215707621i32,
+            1857043921i32,
+            1857043922i32,
+        ];
+        let repetitions = CORRELATION_IDS.len();
+        ensure_server_running();
+        let mut threads = Vec::new();
+        let start_time = Instant::now();
+        for correlation_id in CORRELATION_IDS {
+            let _ = std::net::TcpStream::connect(ADDR).map(|mut stream| {
+                test_apiversions_v4_request_response_for_correlation_id(&mut stream, correlation_id)
+            });
+        }
+        let time_taken_ser = start_time.elapsed();
+        println!("Time taken for 3 serial request: {time_taken_ser:?}");
+        let start_time = Instant::now();
+        for correlation_id in CORRELATION_IDS {
+            for _ in 0..repetitions {
+                threads.push(thread::spawn(move || {
+                    let _ = std::net::TcpStream::connect(ADDR).map(|mut stream| {
+                        test_apiversions_v4_request_response_for_correlation_id(
+                            &mut stream,
+                            correlation_id,
+                        )
+                    });
+                    // thread::sleep(std::time::Duration::from_millis(100));
+                }));
+            }
+        }
+        for thread in threads {
+            thread.join().expect("should be able to join thread");
+        }
+        let time_taken_par = start_time.elapsed();
+        assert!(time_taken_par < time_taken_ser * repetitions as u32);
+        println!("Time taken for 3 parallel requests: {time_taken_par:?}");
     }
 }
