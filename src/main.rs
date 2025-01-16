@@ -53,6 +53,26 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
     }
 }
 
+struct ApiSpec {
+    api_key: i16,
+    min_version: i16,
+    max_version: i16,
+}
+
+trait PutApiSpec {
+    fn put_api_spec(&mut self, api_spec: ApiSpec);
+}
+
+impl PutApiSpec for Vec<u8> {
+    fn put_api_spec(&mut self, api_spec: ApiSpec) {
+        self.put_i16(api_spec.api_key);
+        self.put_i16(api_spec.min_version);
+        self.put_i16(api_spec.max_version);
+        let tag_buffer = 0i8;
+        self.put_i8(tag_buffer);
+    }
+}
+
 fn read_next_request_for_response_v0(stream: &mut TcpStream) -> Result<()> {
     let RequestMessage {
         correlation_id,
@@ -64,20 +84,25 @@ fn read_next_request_for_response_v0(stream: &mut TcpStream) -> Result<()> {
     } else {
         35i16
     };
-    let num_api_keys = 1u8;
-    let apiversions_api_key = 18i16;
-    let apiversions_min_version = 4i16;
-    let apiversions_max_version = 4i16;
+    let num_api_keys = 2u8;
+    let api_versions_spec = ApiSpec {
+        api_key: 18i16,
+        min_version: 4i16,
+        max_version: 4i16,
+    };
+    let describe_topic_partitions_spec = ApiSpec {
+        api_key: 75i16,
+        min_version: 0i16,
+        max_version: 0i16,
+    };
     let throttle_time_ms = 0i32;
     let tag_buffer = 0i8;
     let mut buf = vec![];
     buf.put_i32(correlation_id);
     buf.put_i16(error_code);
     buf.put_u8(num_api_keys + 1);
-    buf.put_i16(apiversions_api_key);
-    buf.put_i16(apiversions_min_version);
-    buf.put_i16(apiversions_max_version);
-    buf.put_i8(tag_buffer);
+    buf.put_api_spec(api_versions_spec);
+    buf.put_api_spec(describe_topic_partitions_spec);
     buf.put_i32(throttle_time_ms);
     buf.put_i8(tag_buffer);
     let message_size = buf.len();
@@ -285,15 +310,23 @@ mod tests {
         let error_code = bytes.get_i16();
         assert_eq!(error_code, 0i16);
         let num_api_keys = bytes.get_u8() - 1;
-        assert_eq!(num_api_keys, 1u8);
+        assert_eq!(num_api_keys, 2u8);
         let apiversions_api_key = bytes.get_i16();
         assert_eq!(apiversions_api_key, 18i16);
         let apiversions_min_version = bytes.get_i16();
         assert_eq!(apiversions_min_version, 4i16);
         let apiversions_max_version = bytes.get_i16();
+        assert_eq!(apiversions_max_version, 4i16);
         let tag_buffer = bytes.get_i8();
         assert_eq!(tag_buffer, 0i8);
-        assert_eq!(apiversions_max_version, 4i16);
+        let describe_topic_partitions_api_key = bytes.get_i16();
+        assert_eq!(describe_topic_partitions_api_key, 75i16);
+        let describe_topic_partitions_min_version = bytes.get_i16();
+        assert_eq!(describe_topic_partitions_min_version, 0i16);
+        let describe_topic_partitions_max_version = bytes.get_i16();
+        assert_eq!(describe_topic_partitions_max_version, 0i16);
+        let tag_buffer = bytes.get_i8();
+        assert_eq!(tag_buffer, 0i8);
         let throttle_time_ms = bytes.get_i32();
         assert_eq!(throttle_time_ms, 0i32);
         let tag_buffer = bytes.get_i8();
