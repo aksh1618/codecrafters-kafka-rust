@@ -1,9 +1,3 @@
-#![allow(
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
-
 use bytes::Buf as _;
 use std::{
     io::{Read as _, Result, Write as _},
@@ -45,7 +39,8 @@ fn read_next_request_for_response_v0(stream: &mut TcpStream) -> Result<()> {
     let request_message_v2 = read_request_v2(stream)?.message;
     let correlation_id = request_message_v2.header.correlation_id;
     let buf = api::handle_request(request_message_v2);
-    let message_size = (size_of_val(&correlation_id) + buf.len()) as i32;
+    let message_size = i32::try_from(size_of_val(&correlation_id) + buf.len())
+        .expect("message size shouldn't be large enough to wrap around when converted to i32");
     // Simpler but multi-shot write
     stream.write_all((message_size).to_be_bytes().as_slice())?;
     stream.write_all((correlation_id).to_be_bytes().as_slice())?;
@@ -105,6 +100,12 @@ fn read_request_header_v2(stream: &mut TcpStream) -> Result<RequestHeaderV2> {
     Ok(header)
 }
 
+#[allow(
+    clippy::restriction,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,23 +124,18 @@ mod tests {
     static INIT: Once = Once::new();
     static INIT_RESULT: Mutex<Option<Result<()>>> = Mutex::new(None);
 
-    #[allow(clippy::unwrap_used)]
     pub fn ensure_server_running() {
         INIT.call_once(|| {
             let result = server::start_server();
             *INIT_RESULT.lock().expect("lock") = Some(result.map(|_| ()));
         });
-        let lock = INIT_RESULT.lock().unwrap();
-        let server_start_result = lock.as_ref().unwrap();
-        let successfully_started = server_start_result.is_ok();
-        assert!(
-            successfully_started,
-            "Server initialization panicked: {server_start_result:?}"
-        );
+        if let Err(e) = INIT_RESULT.lock().unwrap().as_ref().unwrap() {
+            panic!("Server initialization panicked: {e}");
+        };
     }
 
     // #[test]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn test_cmd_apiversions_v4_request_response() -> Result<()> {
         ensure_server_running();
         let output = Command::new("sh")
@@ -164,7 +160,7 @@ mod tests {
     }
 
     // #[test]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn test_cmd_request_v2_response_v0_correlation_id_incorrect_version_id() -> Result<()> {
         ensure_server_running();
         let output = Command::new("sh")
@@ -189,7 +185,7 @@ mod tests {
     }
 
     // #[test]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn test_cmd_request_v2_response_v0_correlation_id() -> Result<()> {
         ensure_server_running();
         let output = Command::new("sh")
@@ -215,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_request_header_v2_response_header_v0_correlation_id() -> Result<()> {
-        #[allow(clippy::unreadable_literal)]
+        #[expect(clippy::unreadable_literal)]
         // const CORRELATION_ID: i32 = 1870644833i32;
         const CORRELATION_ID: i32 = 1234567890i32;
         ensure_server_running();
@@ -241,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_apiversions_v4_request_response() -> Result<()> {
-        #[allow(clippy::unreadable_literal)]
+        #[expect(clippy::unreadable_literal)]
         const CORRELATION_ID: i32 = 1857043921i32;
         ensure_server_running();
         let mut stream = net::TcpStream::connect(ADDR)?;
@@ -307,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unreadable_literal)]
+    #[expect(clippy::unreadable_literal)]
     fn test_multiple_serial_apiversions_v4_request_response() -> Result<()> {
         const CORRELATION_ID_1: i32 = 1956054920i32;
         const CORRELATION_ID_2: i32 = 205506591i32;
@@ -322,7 +318,7 @@ mod tests {
 
     // TODO: Improve this test, can be flaky
     #[test]
-    #[allow(clippy::unreadable_literal)]
+    #[expect(clippy::unreadable_literal)]
     fn test_multiple_parallel_apiversions_v4_request_response() {
         const CORRELATION_IDS: [i32; 5] = [
             1956054920i32,

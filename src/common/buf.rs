@@ -1,12 +1,16 @@
 use bytes::BufMut;
 
-pub(crate) trait BufMutExt<F>
+#[expect(
+    clippy::module_name_repetitions,
+    reason = "Suitable here as it's an *Ext trait"
+)]
+pub trait BufMutExt<F>
 where
     Self: BufMut,
 {
-    fn put_api_response_payload(&mut self, api_spec: &F);
+    fn put_custom(&mut self, custom_object: &F);
 }
 
-// pub(crate) trait BufExt<T> {
+// pub trait BufExt<T> {
 //     fn get_api_request_payload(&mut self) -> T;
 // }

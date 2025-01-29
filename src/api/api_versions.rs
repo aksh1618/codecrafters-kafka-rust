@@ -6,7 +6,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use strum::IntoEnumIterator as _;
 
 // #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct ApiVersionsV4;
+pub struct ApiVersionsV4;
 
 impl KafkaBrokerApi for ApiVersionsV4 {
     fn kind(&self) -> ApiKind {
@@ -38,7 +38,7 @@ fn create_response(request: &RequestMessageV2) -> Result<Bytes> {
         .collect::<Vec<_>>();
     let apis = ApiVersionsResponsePayload::from(apis);
     let mut buf = BytesMut::new();
-    buf.put_api_response_payload(&apis);
+    buf.put_custom(&apis);
     Ok(buf.into())
 }
 
@@ -52,7 +52,7 @@ struct ApiVersionsResponsePayload {
 
 impl ApiVersionsResponsePayload {
     fn from(api_versions: Vec<ApiVersionSpec>) -> Self {
-        ApiVersionsResponsePayload {
+        Self {
             api_versions: CompactArray::from(api_versions),
             ..Default::default()
         }
@@ -62,9 +62,9 @@ impl ApiVersionsResponsePayload {
 // TODO: Update to this once generic implementation for CompactArray is done
 // impl<T: BufMut> BufMutExt<ApiVersionsResponsePayload> for T {
 impl BufMutExt<ApiVersionsResponsePayload> for BytesMut {
-    fn put_api_response_payload(&mut self, response_payload: &ApiVersionsResponsePayload) {
+    fn put_custom(&mut self, response_payload: &ApiVersionsResponsePayload) {
         self.put_i16(response_payload.error_code as i16);
-        self.put_api_response_payload(&response_payload.api_versions);
+        self.put_custom(&response_payload.api_versions);
         self.put_i32(response_payload.throttle_time_ms);
         self.put_i8(response_payload.tag_buffer);
     }
@@ -80,7 +80,7 @@ struct ApiVersionSpec {
 impl From<ApiKind> for ApiVersionSpec {
     fn from(api_kind: ApiKind) -> Self {
         let supported_versions = SupportedVersions::from(api_kind);
-        ApiVersionSpec {
+        Self {
             api_key: api_kind.into(),
             min_version: supported_versions.min_version,
             max_version: supported_versions.max_version,
@@ -89,7 +89,7 @@ impl From<ApiKind> for ApiVersionSpec {
 }
 
 impl<T: BufMut> BufMutExt<ApiVersionSpec> for T {
-    fn put_api_response_payload(&mut self, api_spec: &ApiVersionSpec) {
+    fn put_custom(&mut self, api_spec: &ApiVersionSpec) {
         self.put_i16(api_spec.api_key);
         self.put_i16(api_spec.min_version);
         self.put_i16(api_spec.max_version);

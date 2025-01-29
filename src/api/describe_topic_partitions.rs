@@ -4,7 +4,7 @@ use crate::api::{ApiKind, KafkaBrokerApi};
 use crate::model::*;
 
 // #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct DescribeTopicPartitionsV0;
+pub struct DescribeTopicPartitionsV0;
 
 impl KafkaBrokerApi for DescribeTopicPartitionsV0 {
     fn kind(&self) -> ApiKind {

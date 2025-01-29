@@ -1,1 +1,10 @@
-allowed-wildcard-imports = [ "model" ]
+allowed-wildcard-imports = ["model"]
+allow-renamed-params-for = [
+    "..",
+    "codecrafters_kafka::common::buf::BufMutExt",
+    "codecrafters_kafka::api::KafkaBrokerApi",
+]
+allowed-idents-below-min-chars = [
+    "..",
+    "e",  # For errors
+]

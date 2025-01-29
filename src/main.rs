@@ -1,11 +1,11 @@
 use std::io::Result;
 
 mod api;
-mod common;
+pub mod common;
 mod server;
 
-pub(crate) use common::buf;
-pub(crate) use common::model;
+pub use common::buf;
+pub use common::model;
 
 fn main() -> Result<()> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.

@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "Going to evolve this as we go, so allowing some dead code for now"
+)]
 
 use std::{io, result};
 
@@ -8,25 +11,25 @@ use thiserror::Error;
 
 use crate::buf::BufMutExt;
 
-pub(crate) struct RequestMessageV2 {
-    pub(crate) header: RequestHeaderV2,
-    pub(crate) payload: RequestPayload,
+pub struct RequestMessageV2 {
+    pub header: RequestHeaderV2,
+    pub payload: RequestPayload,
 }
 
 // TODO: Is this beneficial? Should we use newtype instead of alias?
-pub(crate) type RequestPayload = Bytes;
-pub(crate) type ResponsePayload = Bytes;
-// pub(crate) type ResponsePayload<T: BufMut> = T;
-// pub(crate) struct ResponsePayload<T: BufMut>(T);
+pub type RequestPayload = Bytes;
+pub type ResponsePayload = Bytes;
+// pub type ResponsePayload<T: BufMut> = T;
+// pub struct ResponsePayload<T: BufMut>(T);
 
-#[derive(Debug)]
-pub(crate) struct RequestHeaderV2 {
-    pub(crate) api_key: ApiKey,
-    pub(crate) api_version: ApiVersion,
-    pub(crate) correlation_id: CorrelationId,
+#[derive(Debug, Default)]
+pub struct RequestHeaderV2 {
+    pub api_key: ApiKey,
+    pub api_version: ApiVersion,
+    pub correlation_id: CorrelationId,
 }
 
-// pub(crate) trait RequestPayload<T> {
+// pub trait RequestPayload<T> {
 //     fn get_api_request_payload(&mut self) -> T;
 // }
 //
@@ -37,33 +40,34 @@ pub(crate) struct RequestHeaderV2 {
 // }
 
 // TODO: Is this beneficial? Should we use newtype instead of alias?
-pub(crate) type ApiKey = i16;
-pub(crate) type ApiVersion = i16;
-pub(crate) type CorrelationId = i32;
+pub type ApiKey = i16;
+pub type ApiVersion = i16;
+pub type CorrelationId = i32;
 
-pub(crate) struct SupportedVersions {
-    pub(crate) min_version: ApiVersion,
-    pub(crate) max_version: ApiVersion,
+pub struct SupportedVersions {
+    pub min_version: ApiVersion,
+    pub max_version: ApiVersion,
 }
 
-pub(crate) struct RequestV2 {
-    pub(crate) size: i32,
-    pub(crate) message: RequestMessageV2,
+pub struct RequestV2 {
+    pub size: i32,
+    pub message: RequestMessageV2,
 }
 
-pub(crate) struct Response {
-    pub(crate) message_size: i32,
-    pub(crate) message: ResponsePayload,
+pub struct Response {
+    pub message_size: i32,
+    pub message: ResponsePayload,
 }
 
-/// We use numeric codes to indicate what problem occurred on the server. These can be translated
-/// by the client into exceptions or whatever the appropriate error handling mechanism in the
-/// client language.
+/// Error codes from the Kafka Protocol
 ///
-/// (Copied form [kafka protocol doc](https://kafka.apache.org/protocol.html#protocol_error_codes))
+/// > We use numeric codes to indicate what problem occurred on the server. These can be translated
+/// > by the client into exceptions or whatever the appropriate error handling mechanism in the
+/// > client language.
+/// > (From [Kafka protocol doc](https://kafka.apache.org/protocol.html#protocol_error_codes))
 #[repr(i16)]
 #[derive(Display, Debug, Default, Copy, Clone, Error)]
-pub(crate) enum ErrorCode {
+pub enum ErrorCode {
     UnknownServerError = -1,
     #[default]
     None = 0,
@@ -72,7 +76,7 @@ pub(crate) enum ErrorCode {
     // TODO: Add more from https://kafka.apache.org/protocol.html#protocol_error_codes
 }
 
-pub(crate) type Result<T> = result::Result<T, ErrorCode>;
+pub type Result<T> = result::Result<T, ErrorCode>;
 
 impl From<ErrorCode> for Bytes {
     fn from(error_code: ErrorCode) -> Self {
@@ -84,28 +88,30 @@ impl From<ErrorCode> for Bytes {
 
 impl From<io::Error> for ErrorCode {
     fn from(error: io::Error) -> Self {
-        match error.kind() {
-            io::ErrorKind::InvalidData => ErrorCode::InvalidRequest,
-            _ => ErrorCode::UnknownServerError,
+        if error.kind() == io::ErrorKind::InvalidData {
+            Self::InvalidRequest
+        } else {
+            Self::UnknownServerError
         }
     }
 }
 
 // TODO: Make this actually unsigned varint
-pub(crate) type UnsignedVarint = u8;
+pub type UnsignedVarint = u8;
 
 #[derive(Default)]
-pub(crate) struct CompactArray<Item> {
-    pub(crate) length: UnsignedVarint,
-    pub(crate) elements: Vec<Item>,
+pub struct CompactArray<Item> {
+    pub length: UnsignedVarint,
+    pub elements: Vec<Item>,
 }
 
 // TODO: Add null array case
-#[allow(clippy::cast_possible_truncation)]
 impl<T> From<Vec<T>> for CompactArray<T> {
     fn from(value: Vec<T>) -> Self {
-        CompactArray {
-            length: value.len() as UnsignedVarint,
+        Self {
+            length: UnsignedVarint::try_from(value.len()).expect(
+                "Arrays should be smaller than i8::max in length, probably time to refactor",
+            ),
             elements: value,
         }
     }
@@ -113,20 +119,20 @@ impl<T> From<Vec<T>> for CompactArray<T> {
 
 impl<Item> BufMutExt<CompactArray<Item>> for BytesMut
 where
-    bytes::BytesMut: BufMutExt<Item>,
+    Self: BufMutExt<Item>,
 {
-    fn put_api_response_payload(&mut self, compact_array: &CompactArray<Item>) {
+    fn put_custom(&mut self, compact_array: &CompactArray<Item>) {
         self.put_u8(compact_array.length + 1);
         for x in &compact_array.elements {
-            self.put_api_response_payload(x);
+            self.put_custom(x);
         }
     }
 }
 
-pub(crate) type Int32 = i32;
+pub type Int32 = i32;
 
 // TODO: Make this actually TagBuffer, see https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=120722234#KIP482:TheKafkaProtocolshouldSupportOptionalTaggedFields-Serialization
-pub(crate) type TagBuffer = i8;
+pub type TagBuffer = i8;
 
 // impl<T: BufMut, Item> BufMutExt<CompactArray<Item>> for T
 // where

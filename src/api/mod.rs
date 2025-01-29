@@ -1,3 +1,9 @@
+#![allow(
+    clippy::module_name_repetitions,
+    reason = "We're going to use file-per-api structuring, with all versions of the api in the
+    corresponding file. So the struct names are going to be of the form ApiNameV0."
+)]
+
 use crate::model::*;
 
 use api_versions::ApiVersionsV4;
@@ -5,12 +11,12 @@ use bytes::Bytes;
 use describe_topic_partitions::DescribeTopicPartitionsV0;
 use strum::{Display, EnumIter, FromRepr};
 
-pub(crate) mod api_versions;
-pub(crate) mod describe_topic_partitions;
+pub mod api_versions;
+pub mod describe_topic_partitions;
 
 #[derive(Display, Debug, Clone, Copy, FromRepr, EnumIter)]
 #[repr(i16)]
-pub(crate) enum ApiKind {
+pub enum ApiKind {
     ApiVersions = 18,
     DescribeTopicPartitions = 75,
 }
@@ -24,7 +30,7 @@ fn apis_for_kind(api_kind: ApiKind) -> Vec<Box<dyn KafkaBrokerApi>> {
 
 impl From<ApiKind> for ApiKey {
     fn from(api_kind: ApiKind) -> Self {
-        api_kind as i16
+        api_kind as Self
     }
 }
 
@@ -32,7 +38,7 @@ impl TryFrom<ApiKey> for ApiKind {
     type Error = ErrorCode;
 
     fn try_from(api_key: ApiKey) -> Result<Self> {
-        ApiKind::from_repr(api_key).ok_or(ErrorCode::InvalidRequest)
+        Self::from_repr(api_key).ok_or(ErrorCode::InvalidRequest)
     }
 }
 
@@ -50,19 +56,19 @@ impl From<ApiKind> for SupportedVersions {
             .map(|api| api.api_version())
             .max()
             .unwrap_or_else(|| panic!("Unsupported api kind {api_kind}"));
-        SupportedVersions {
+        Self {
             min_version,
             max_version,
         }
     }
 }
 
-#[allow(
+#[expect(
     dead_code,
     reason = "kind & api_key not being used currently, but need to keep kind reverse mapping in
     implementation and might be used in future"
 )]
-pub(crate) trait KafkaBrokerApi {
+pub trait KafkaBrokerApi {
     fn kind(&self) -> ApiKind;
     fn api_version(&self) -> ApiVersion;
     fn api_key(&self) -> ApiKey {
@@ -71,7 +77,7 @@ pub(crate) trait KafkaBrokerApi {
     fn handle_request(&self, request: RequestMessageV2) -> Result<ResponsePayload>;
 }
 
-pub(crate) fn handle_request(request_message_v2: RequestMessageV2) -> Bytes {
+pub fn handle_request(request_message_v2: RequestMessageV2) -> Bytes {
     let api_key = request_message_v2.header.api_key;
     let api_kind = match api_key.try_into() {
         Ok(api_kind) => api_kind,
