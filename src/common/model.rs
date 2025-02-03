@@ -5,11 +5,12 @@
 
 use std::{io, result};
 
-use bytes::{BufMut as _, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use strum::Display;
 use thiserror::Error;
 
-use crate::buf::BufMutExt;
+use super::buf::BufMutExt as _;
+use super::buf::Encode;
 
 pub struct RequestMessageV2 {
     pub header: RequestHeaderV2,
@@ -117,14 +118,11 @@ impl<T> From<Vec<T>> for CompactArray<T> {
     }
 }
 
-impl<Item> BufMutExt<CompactArray<Item>> for BytesMut
-where
-    Self: BufMutExt<Item>,
-{
-    fn put_custom(&mut self, compact_array: &CompactArray<Item>) {
-        self.put_u8(compact_array.length + 1);
-        for x in &compact_array.elements {
-            self.put_custom(x);
+impl<Item: Encode> Encode for CompactArray<Item> {
+    fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
+        buf.put_u8(self.length + 1);
+        for x in &self.elements {
+            buf.put_encoded(x);
         }
     }
 }
@@ -133,6 +131,12 @@ pub type Int32 = i32;
 
 // TODO: Make this actually TagBuffer, see https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=120722234#KIP482:TheKafkaProtocolshouldSupportOptionalTaggedFields-Serialization
 pub type TagBuffer = i8;
+
+impl Encode for TagBuffer {
+    fn encode<T: BufMut + ?Sized>(&self, buf: &mut T) {
+        buf.put_i8(*self);
+    }
+}
 
 // impl<T: BufMut, Item> BufMutExt<CompactArray<Item>> for T
 // where

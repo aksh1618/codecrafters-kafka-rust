@@ -1,8 +1,8 @@
 use crate::api::{ApiKind, KafkaBrokerApi};
-use crate::buf::BufMutExt;
+use crate::buf::{BufMutExt as _, Encode};
 use crate::model::Result;
 use crate::model::*;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use strum::IntoEnumIterator as _;
 
 // #[derive(Debug, Clone, Copy, Default)]
@@ -17,7 +17,7 @@ impl KafkaBrokerApi for ApiVersionsV4 {
         4
     }
 
-    fn handle_request(&self, request: RequestMessageV2) -> Result<Bytes> {
+    fn handle_request(&self, request: RequestMessageV2) -> Result<ResponsePayload> {
         create_response(&request)
     }
 }
@@ -29,7 +29,7 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
     None
 }
 
-fn create_response(request: &RequestMessageV2) -> Result<Bytes> {
+fn create_response(request: &RequestMessageV2) -> Result<ResponsePayload> {
     if let Some(error_code) = validate(request) {
         return Err(error_code);
     }
@@ -38,7 +38,7 @@ fn create_response(request: &RequestMessageV2) -> Result<Bytes> {
         .collect::<Vec<_>>();
     let apis = ApiVersionsResponsePayload::from(apis);
     let mut buf = BytesMut::new();
-    buf.put_custom(&apis);
+    buf.put_encoded(&apis);
     Ok(buf.into())
 }
 
@@ -59,14 +59,12 @@ impl ApiVersionsResponsePayload {
     }
 }
 
-// TODO: Update to this once generic implementation for CompactArray is done
-// impl<T: BufMut> BufMutExt<ApiVersionsResponsePayload> for T {
-impl BufMutExt<ApiVersionsResponsePayload> for BytesMut {
-    fn put_custom(&mut self, response_payload: &ApiVersionsResponsePayload) {
-        self.put_i16(response_payload.error_code as i16);
-        self.put_custom(&response_payload.api_versions);
-        self.put_i32(response_payload.throttle_time_ms);
-        self.put_i8(response_payload.tag_buffer);
+impl Encode for ApiVersionsResponsePayload {
+    fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
+        buf.put_i16(self.error_code as i16);
+        buf.put_encoded(&self.api_versions);
+        buf.put_i32(self.throttle_time_ms);
+        buf.put_i8(self.tag_buffer);
     }
 }
 
@@ -75,6 +73,7 @@ struct ApiVersionSpec {
     api_key: i16,
     min_version: i16,
     max_version: i16,
+    tag_buffer: TagBuffer,
 }
 
 impl From<ApiKind> for ApiVersionSpec {
@@ -84,16 +83,16 @@ impl From<ApiKind> for ApiVersionSpec {
             api_key: api_kind.into(),
             min_version: supported_versions.min_version,
             max_version: supported_versions.max_version,
+            ..Default::default()
         }
     }
 }
 
-impl<T: BufMut> BufMutExt<ApiVersionSpec> for T {
-    fn put_custom(&mut self, api_spec: &ApiVersionSpec) {
-        self.put_i16(api_spec.api_key);
-        self.put_i16(api_spec.min_version);
-        self.put_i16(api_spec.max_version);
-        let tag_buffer = TagBuffer::default();
-        self.put_i8(tag_buffer);
+impl Encode for ApiVersionSpec {
+    fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
+        buf.put_i16(self.api_key);
+        buf.put_i16(self.min_version);
+        buf.put_i16(self.max_version);
+        buf.put_encoded(&self.tag_buffer);
     }
 }
