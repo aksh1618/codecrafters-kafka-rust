@@ -1,5 +1,4 @@
-use bytes::Bytes;
-
+use super::{RequestMessageV2, ResponsePayload};
 use crate::api::{ApiKind, KafkaBrokerApi};
 use crate::model::*;
 
@@ -15,7 +14,7 @@ impl KafkaBrokerApi for DescribeTopicPartitionsV0 {
         0
     }
 
-    fn handle_request(&self, request: RequestMessageV2) -> Result<Bytes> {
+    fn handle_request(&self, request: RequestMessageV2) -> Result<ResponsePayload> {
         create_response(&request)
     }
 }
@@ -27,7 +26,7 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
     None
 }
 
-fn create_response(request: &RequestMessageV2) -> Result<Bytes> {
+fn create_response(request: &RequestMessageV2) -> Result<ResponsePayload> {
     if let Some(error_code) = validate(request) {
         return Err(error_code);
     }

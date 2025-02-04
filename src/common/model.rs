@@ -14,54 +14,6 @@ use thiserror::Error;
 use super::buf::BufMutExt as _;
 use super::buf::Encode;
 
-pub struct RequestMessageV2 {
-    pub header: RequestHeaderV2,
-    pub payload: RequestPayload,
-}
-
-// TODO: Is this beneficial? Should we use newtype instead of alias?
-pub type RequestPayload = Bytes;
-pub type ResponsePayload = Bytes;
-// pub type ResponsePayload<T: BufMut> = T;
-// pub struct ResponsePayload<T: BufMut>(T);
-
-#[derive(Debug, Default)]
-pub struct RequestHeaderV2 {
-    pub api_key: ApiKey,
-    pub api_version: ApiVersion,
-    pub correlation_id: CorrelationId,
-}
-
-// pub trait RequestPayload<T> {
-//     fn get_api_request_payload(&mut self) -> T;
-// }
-//
-// impl RequestPayload<ApiVersionsRequest> for Vec<u8> {
-//     fn get_api_request_payload(&mut self) -> ApiVersionsRequest {
-//         todo!()
-//     }
-// }
-
-// TODO: Is this beneficial? Should we use newtype instead of alias?
-pub type ApiKey = i16;
-pub type ApiVersion = i16;
-pub type CorrelationId = i32;
-
-pub struct SupportedVersions {
-    pub min_version: ApiVersion,
-    pub max_version: ApiVersion,
-}
-
-pub struct RequestV2 {
-    pub size: i32,
-    pub message: RequestMessageV2,
-}
-
-pub struct Response {
-    pub message_size: i32,
-    pub message: ResponsePayload,
-}
-
 /// Error codes from the Kafka Protocol
 ///
 /// > We use numeric codes to indicate what problem occurred on the server. These can be translated
@@ -99,9 +51,6 @@ impl From<io::Error> for ErrorCode {
     }
 }
 
-// TODO: Make this actually unsigned varint
-pub type UnsignedVarint = u8;
-
 #[derive(Debug, Default)]
 pub struct CompactArray<Item> {
     pub length: UnsignedVarint,
@@ -129,8 +78,14 @@ impl<Item: Encode> Encode for CompactArray<Item> {
     }
 }
 
+// TODO: Make this actually unsigned varint
+pub type UnsignedVarint = u8;
 // TODO: Make this actually TagBuffer, see https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=120722234#KIP482:TheKafkaProtocolshouldSupportOptionalTaggedFields-Serialization
 pub type TagBuffer = i8;
+// TODO: Is this beneficial? Should we use newtype instead of alias?
+pub type ApiKey = i16;
+pub type ApiVersion = i16;
+pub type CorrelationId = i32;
 pub type Int16 = i16;
 pub type Int32 = i32;
 pub type Int64 = i64;
@@ -153,18 +108,3 @@ impl_encode_int!(i16);
 impl_encode_int!(i32);
 impl_encode_int!(i64);
 
-// impl<T: BufMut, Item> BufMutExt<CompactArray<Item>> for T
-// where
-//     for<'a> &'a mut T: BufMutExt<Item>,
-// {
-//     fn put_api_response_payload(&mut self, api_spec: &CompactArray<Item>) {
-//         self.put_u8(api_spec.length);
-//         for x in &api_spec.elements {
-//             self.put_api_response_payload(x);
-//         }
-//         // api_spec
-//         //     .elements
-//         //     .into_iter()
-//         //     .for_each(|x| BufMutExt::put_api_response_payload(&mut self, &x));
-//     }
-// }

@@ -5,8 +5,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::api;
-use crate::model::{RequestHeaderV2, RequestMessageV2, RequestV2};
+use crate::api::{self, RequestHeaderV2, RequestMessageV2, RequestV2};
 // For one-shot write
 // use bytes::{Buf as _, BufMut as _, Bytes};
 

@@ -1,3 +1,5 @@
+use super::apis_for_kind;
+use super::{RequestMessageV2, ResponsePayload};
 use crate::api::{ApiKind, KafkaBrokerApi};
 use crate::buf::BufMutExt as _;
 use crate::model::Result;
@@ -70,11 +72,21 @@ struct ApiVersionSpec {
 
 impl From<ApiKind> for ApiVersionSpec {
     fn from(api_kind: ApiKind) -> Self {
-        let supported_versions = SupportedVersions::from(api_kind);
+        let apis = apis_for_kind(api_kind);
+        let min_version = apis
+            .iter()
+            .map(|api| api.api_version())
+            .min()
+            .unwrap_or_else(|| panic!("Unsupported api kind {api_kind}"));
+        let max_version = apis
+            .iter()
+            .map(|api| api.api_version())
+            .max()
+            .unwrap_or_else(|| panic!("Unsupported api kind {api_kind}"));
         Self {
             api_key: api_kind.into(),
-            min_version: supported_versions.min_version,
-            max_version: supported_versions.max_version,
+            min_version,
+            max_version,
             ..Default::default()
         }
     }

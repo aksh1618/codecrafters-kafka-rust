@@ -3,6 +3,10 @@
     reason = "We're going to use file-per-api structuring, with all versions of the api in the
     corresponding file. So the struct names are going to be of the form ApiNameV0."
 )]
+#![allow(
+    dead_code,
+    reason = "Going to evolve this as we go, so allowing some dead code for now"
+)]
 
 use crate::model::*;
 
@@ -21,7 +25,7 @@ pub enum ApiKind {
     DescribeTopicPartitions = 75,
 }
 
-fn apis_for_kind(api_kind: ApiKind) -> Vec<Box<dyn KafkaBrokerApi>> {
+pub fn apis_for_kind(api_kind: ApiKind) -> Vec<Box<dyn KafkaBrokerApi>> {
     match api_kind {
         ApiKind::ApiVersions => vec![Box::new(ApiVersionsV4)],
         ApiKind::DescribeTopicPartitions => vec![Box::new(DescribeTopicPartitionsV0)],
@@ -42,26 +46,33 @@ impl TryFrom<ApiKey> for ApiKind {
     }
 }
 
-// TODO: Should this be in api_versions.rs?
-impl From<ApiKind> for SupportedVersions {
-    fn from(api_kind: ApiKind) -> Self {
-        let apis = apis_for_kind(api_kind);
-        let min_version = apis
-            .iter()
-            .map(|api| api.api_version())
-            .min()
-            .unwrap_or_else(|| panic!("Unsupported api kind {api_kind}"));
-        let max_version = apis
-            .iter()
-            .map(|api| api.api_version())
-            .max()
-            .unwrap_or_else(|| panic!("Unsupported api kind {api_kind}"));
-        Self {
-            min_version,
-            max_version,
-        }
-    }
+pub struct RequestV2 {
+    pub size: i32,
+    pub message: RequestMessageV2,
 }
+
+pub struct Response {
+    pub message_size: i32,
+    pub message: ResponsePayload,
+}
+
+pub struct RequestMessageV2 {
+    pub header: RequestHeaderV2,
+    pub payload: RequestPayload,
+}
+
+#[derive(Debug, Default)]
+pub struct RequestHeaderV2 {
+    pub api_key: ApiKey,
+    pub api_version: ApiVersion,
+    pub correlation_id: CorrelationId,
+}
+
+// TODO: Is this beneficial? Should we use newtype instead of alias?
+pub type RequestPayload = Bytes;
+pub type ResponsePayload = Bytes;
+// pub type ResponsePayload<T: BufMut> = T;
+// pub struct ResponsePayload<T: BufMut>(T);
 
 #[expect(
     dead_code,
