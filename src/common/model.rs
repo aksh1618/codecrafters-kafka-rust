@@ -6,6 +6,8 @@
 use std::{io, result};
 
 use bytes::{BufMut, Bytes, BytesMut};
+use encode_derive::Encode;
+use paste::paste;
 use strum::Display;
 use thiserror::Error;
 
@@ -67,7 +69,7 @@ pub struct Response {
 /// > client language.
 /// > (From [Kafka protocol doc](https://kafka.apache.org/protocol.html#protocol_error_codes))
 #[repr(i16)]
-#[derive(Display, Debug, Default, Copy, Clone, Error)]
+#[derive(Display, Debug, Default, Copy, Clone, Error, Encode)]
 pub enum ErrorCode {
     UnknownServerError = -1,
     #[default]
@@ -100,7 +102,7 @@ impl From<io::Error> for ErrorCode {
 // TODO: Make this actually unsigned varint
 pub type UnsignedVarint = u8;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct CompactArray<Item> {
     pub length: UnsignedVarint,
     pub elements: Vec<Item>,
@@ -127,16 +129,29 @@ impl<Item: Encode> Encode for CompactArray<Item> {
     }
 }
 
-pub type Int32 = i32;
-
 // TODO: Make this actually TagBuffer, see https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=120722234#KIP482:TheKafkaProtocolshouldSupportOptionalTaggedFields-Serialization
 pub type TagBuffer = i8;
+pub type Int16 = i16;
+pub type Int32 = i32;
+pub type Int64 = i64;
 
-impl Encode for TagBuffer {
-    fn encode<T: BufMut + ?Sized>(&self, buf: &mut T) {
-        buf.put_i8(*self);
-    }
+macro_rules! impl_encode_int {
+    ($ty:ty) => {
+        paste! {
+            impl Encode for $ty {
+                fn encode<T: BufMut + ?Sized>(&self, buf: &mut T) {
+                    buf.[<put_$ty>](*self);
+                }
+            }
+        }
+    };
 }
+
+impl_encode_int!(u8);
+impl_encode_int!(i8);
+impl_encode_int!(i16);
+impl_encode_int!(i32);
+impl_encode_int!(i64);
 
 // impl<T: BufMut, Item> BufMutExt<CompactArray<Item>> for T
 // where

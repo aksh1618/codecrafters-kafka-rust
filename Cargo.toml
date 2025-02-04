@@ -6,10 +6,12 @@ edition = "2021"
 rust-version = "1.84"
 
 [dependencies]
-anyhow = "1.0.95"                                     # error handling
-bytes = "1.9.0"                                       # helps manage buffers
-strum = { version = "0.26.3", features = ["derive"] } # enum utils
-thiserror = "2.0.11"                                  # error handling
+anyhow = "1.0.95"                                     # error handling         #
+bytes = "1.9.0"                                       # helps manage buffers   #
+encode-derive = { version = "0.1.0", path = "encode-derive" }                  #
+paste = "1.0.15"                                      # helps with macro magic #
+strum = { version = "0.26.3", features = ["derive"] } # enum utils             #
+thiserror = "2.0.11"                                  # error handling         #
 
 [dev-dependencies]
 indoc = "2.0.5"

@@ -1,8 +1,9 @@
 use crate::api::{ApiKind, KafkaBrokerApi};
-use crate::buf::{BufMutExt as _, Encode};
+use crate::buf::BufMutExt as _;
 use crate::model::Result;
 use crate::model::*;
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
+use encode_derive::Encode;
 use strum::IntoEnumIterator as _;
 
 // #[derive(Debug, Clone, Copy, Default)]
@@ -42,7 +43,7 @@ fn create_response(request: &RequestMessageV2) -> Result<ResponsePayload> {
     Ok(buf.into())
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, Encode)]
 struct ApiVersionsResponsePayload {
     error_code: ErrorCode,
     api_versions: CompactArray<ApiVersionSpec>,
@@ -59,20 +60,11 @@ impl ApiVersionsResponsePayload {
     }
 }
 
-impl Encode for ApiVersionsResponsePayload {
-    fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
-        buf.put_i16(self.error_code as i16);
-        buf.put_encoded(&self.api_versions);
-        buf.put_i32(self.throttle_time_ms);
-        buf.put_i8(self.tag_buffer);
-    }
-}
-
-#[derive(Default)]
+#[derive(Debug, Default, Encode)]
 struct ApiVersionSpec {
-    api_key: i16,
-    min_version: i16,
-    max_version: i16,
+    api_key: Int16,
+    min_version: Int16,
+    max_version: Int16,
     tag_buffer: TagBuffer,
 }
 
@@ -85,14 +77,5 @@ impl From<ApiKind> for ApiVersionSpec {
             max_version: supported_versions.max_version,
             ..Default::default()
         }
-    }
-}
-
-impl Encode for ApiVersionSpec {
-    fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
-        buf.put_i16(self.api_key);
-        buf.put_i16(self.min_version);
-        buf.put_i16(self.max_version);
-        buf.put_encoded(&self.tag_buffer);
     }
 }
