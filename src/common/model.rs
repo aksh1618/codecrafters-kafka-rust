@@ -27,6 +27,7 @@ pub enum ErrorCode {
     UnknownServerError = -1,
     #[default]
     None = 0,
+    UnknownTopicOrPartition = 3,
     UnsupportedVersion = 35,
     InvalidRequest = 42,
     // TODO: Add more from https://kafka.apache.org/protocol.html#protocol_error_codes
@@ -79,6 +80,31 @@ impl<Item: Encode> Encode for CompactArray<Item> {
     }
 }
 
+impl<Item: Decode> Decode for CompactArray<Item> {
+    fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
+        let length = buf.get_u8().saturating_sub(1);
+        let mut elements = Vec::with_capacity(length as usize);
+        for _ in 0..length {
+            elements.push(buf.get_decoded());
+        }
+        Self { length, elements }
+    }
+}
+
+pub type Boolean = bool;
+impl Encode for Boolean {
+    fn encode<T: BufMut + ?Sized>(&self, buf: &mut T) {
+        buf.put_u8(u8::from(*self));
+    }
+}
+
+pub type Uuid = uuid::Uuid;
+impl Encode for Uuid {
+    fn encode<T: BufMut + ?Sized>(&self, buf: &mut T) {
+        buf.put_slice(self.as_bytes());
+    }
+}
+
 // TODO: Make this actually unsigned varint
 pub type UnsignedVarint = u8;
 // TODO: Make this actually TagBuffer, see https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=120722234#KIP482:TheKafkaProtocolshouldSupportOptionalTaggedFields-Serialization
@@ -127,6 +153,26 @@ impl_decode_int!(i16);
 impl_decode_int!(i32);
 impl_decode_int!(i64);
 
+#[derive(Debug, Default, Encode)]
+pub struct CompactString {
+    pub length: UnsignedVarint,
+    pub value: Option<Bytes>,
+}
+
+impl Decode for CompactString {
+    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
+        let length = buf.get_u8().saturating_sub(1);
+        if length == 0 {
+            return Self {
+                length: 0,
+                value: Some(Bytes::new()),
+            };
+        }
+        let value = Some(buf.take(length.into()).get_decoded());
+        Self { length, value }
+    }
+}
+
 #[derive(Debug, SmartDefault)]
 pub struct NullableString {
     #[default(-1_i16)]
@@ -146,6 +192,33 @@ impl Decode for NullableString {
         let string_length = length.try_into().expect("length should be non-negative");
         let value = Some(buf.take(string_length).get_decoded());
         Self { length, value }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct CompactNullableString {
+    pub length: UnsignedVarint,
+    pub value: Option<Bytes>,
+}
+
+impl Encode for CompactNullableString {
+    fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
+        buf.put_u8(self.length + 1);
+        buf.put_encoded(&self.value);
+    }
+}
+
+impl Encode for Option<Bytes> {
+    fn encode<B: BufMut + ?Sized>(&self, mut buf: &mut B) {
+        if let Some(x) = self {
+            buf.put_encoded(x);
+        }
+    }
+}
+
+impl Encode for Bytes {
+    fn encode<B: BufMut + ?Sized>(&self, buf: &mut B) {
+        buf.put_slice(self);
     }
 }
 

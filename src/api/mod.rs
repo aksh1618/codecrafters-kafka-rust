@@ -108,15 +108,15 @@ pub struct ResponseHeaderV1 {
 impl Response {
     pub fn new(api_kind: ApiKind, correlation_id: CorrelationId, payload: ResponsePayload) -> Self {
         match api_kind {
-            ApiKind::ApiVersions => Response::new_v0(correlation_id, payload),
-            _ => Response::new_v1(correlation_id, payload),
+            ApiKind::ApiVersions => Self::new_v0(correlation_id, payload),
+            _ => Self::new_v1(correlation_id, payload),
         }
     }
 
     pub fn new_v0(correlation_id: CorrelationId, payload: ResponsePayload) -> Self {
         let message_size = i32::try_from(size_of_val(&correlation_id) + payload.len())
             .expect("message size shouldn't be large enough to wrap around when converted to i32");
-        Response::V0(ResponseV0 {
+        Self::V0(ResponseV0 {
             message_size,
             message: ResponseMessageV0 {
                 header: ResponseHeaderV0 { correlation_id },
@@ -132,7 +132,7 @@ impl Response {
                 .expect(
                     "message size shouldn't be large enough to wrap around when converted to i32",
                 );
-        Response::V1(ResponseV1 {
+        Self::V1(ResponseV1 {
             message_size,
             message: ResponseMessageV1 {
                 header: ResponseHeaderV1 {
@@ -144,41 +144,27 @@ impl Response {
         })
     }
 
-    pub fn message_size(&self) -> i32 {
+    pub const fn message_size(&self) -> i32 {
         match self {
-            Response::V0(response) => response.message_size,
-            Response::V1(response) => response.message_size,
+            Self::V0(response) => response.message_size,
+            Self::V1(response) => response.message_size,
         }
     }
 
-    pub fn correlation_id(&self) -> CorrelationId {
+    pub fn into_bytes(self) -> Bytes {
         match self {
-            Response::V0(response) => response.message.header.correlation_id,
-            Response::V1(response) => response.message.header.correlation_id,
-        }
-    }
-
-    pub fn payload(&self) -> &ResponsePayload {
-        match self {
-            Response::V0(response) => &response.message.payload,
-            Response::V1(response) => &response.message.payload,
-        }
-    }
-
-    pub fn to_bytes(self) -> Bytes {
-        match self {
-            Response::V0(response) => {
+            Self::V0(response) => {
                 let message_size = response.message_size;
                 let correlation_id = response.message.header.correlation_id;
                 let payload = response.message.payload;
-                let response_size = size_of_val(&message_size) + message_size as usize;
-                let response = (message_size.to_be_bytes().as_slice())
+                let response_size = size_of_val(&message_size)
+                    + usize::try_from(message_size).expect("message size should be non-negative");
+                (message_size.to_be_bytes().as_slice())
                     .chain(correlation_id.to_be_bytes().as_slice())
                     .chain(payload)
-                    .copy_to_bytes(response_size);
-                response
+                    .copy_to_bytes(response_size)
             }
-            Response::V1(response) => {
+            Self::V1(response) => {
                 let message_size = response.message_size;
                 let correlation_id = response.message.header.correlation_id;
                 let tag_buffer = response.message.header.tag_buffer;
@@ -187,12 +173,11 @@ impl Response {
                     + size_of_val(&correlation_id)
                     + size_of_val(&tag_buffer)
                     + payload.len();
-                let response = (message_size.to_be_bytes().as_slice())
+                (message_size.to_be_bytes().as_slice())
                     .chain(correlation_id.to_be_bytes().as_slice())
                     .chain(tag_buffer.to_be_bytes().as_slice())
                     .chain(payload)
-                    .copy_to_bytes(response_size);
-                response
+                    .copy_to_bytes(response_size)
             }
         }
     }

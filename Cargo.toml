@@ -3,7 +3,7 @@ name = "codecrafters-kafka"
 version = "0.1.0"
 authors = ["Codecrafters <hello@codecrafters.io>"]
 edition = "2021"
-rust-version = "1.84"
+rust-version = "1.82"
 
 [dependencies]
 anyhow = "1.0.95"                                     # error handling         #
@@ -13,6 +13,7 @@ paste = "1.0.15"                                      # helps with macro magic #
 smart-default = "0.7.1"                               # simpler default impls  #
 strum = { version = "0.26.3", features = ["derive"] } # enum utils             #
 thiserror = "2.0.11"                                  # error handling         #
+uuid = "1.12.1"                                       # uuids                  #
 
 [dev-dependencies]
 indoc = "2.0.5"

@@ -42,7 +42,7 @@ fn read_next_request_for_response_v0(stream: &mut TcpStream) -> Result<()> {
     let correlation_id = request_message_v2.header.correlation_id;
     let response = api::handle_request(request_message_v2);
     let message_size = response.message_size();
-    stream.write_all(&response.to_bytes())?;
+    stream.write_all(&response.into_bytes())?;
     stream.flush()?;
     println!("Wrote and flushed {message_size}(+4) response bytes for {correlation_id}");
     Ok(())
@@ -333,4 +333,19 @@ mod tests {
         assert!(time_taken_par < time_taken_ser * repetitions as u32);
         println!("Time taken for 3 parallel requests: {time_taken_par:?}");
     }
+
+    // #[test]
+    // #[expect(clippy::unreadable_literal)]
+    // fn test_describe_topic_partitions_v0_request_response() -> Result<()> {
+    //     const CORRELATION_ID_3: i32 = 215707621i32;
+    //     ensure_server_running();
+    //     let mut stream = net::TcpStream::connect(ADDR)?;
+    //     Ok(())
+    // }
+    // Idx  | Hex                                             | ASCII
+    // -----+-------------------------------------------------+-----------------
+    // 0000 | 00 00 00 31 00 4b 00 00 56 77 e2 2e 00 0c 6b 61 | ...1.K..Vw....ka
+    // 0010 | 66 6b 61 2d 74 65 73 74 65 72 00 02 12 75 6e 6b | fka-tester...unk
+    // 0020 | 6e 6f 77 6e 2d 74 6f 70 69 63 2d 70 61 7a 00 00 | nown-topic-paz..
+    // 0030 | 00 00 01 ff 00                                  | .....
 }
