@@ -5,7 +5,7 @@ use crate::buf::BufMutExt as _;
 use crate::model::Result;
 use crate::model::*;
 use bytes::BytesMut;
-use encode_derive::Encode;
+use encode_decode_derive::Encode;
 use strum::IntoEnumIterator as _;
 
 // #[derive(Debug, Clone, Copy, Default)]

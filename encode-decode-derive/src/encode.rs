@@ -1,22 +1,14 @@
-use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Data, DeriveInput, Fields, Generics, Ident, Index, Type};
 
-#[proc_macro_derive(Encode)]
-pub fn derive_encode(input: TokenStream) -> TokenStream {
-    let ast = syn::parse(input).unwrap();
-    impl_encode(&ast)
-}
-
-fn impl_encode(ast: &DeriveInput) -> TokenStream {
+pub fn impl_encode(ast: &DeriveInput) -> TokenStream2 {
     let type_name = &ast.ident;
     match ast.data {
         Data::Struct(ref data) => impl_encode_for_struct(type_name, &data.fields, &ast.generics),
         Data::Enum(ref _data) => impl_encode_for_enum(type_name, &ast.attrs),
         _ => unimplemented!(),
     }
-    .into()
 }
 
 fn impl_encode_for_struct(

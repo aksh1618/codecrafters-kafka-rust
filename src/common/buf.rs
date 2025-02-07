@@ -1,4 +1,4 @@
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 
 #[expect(
     clippy::module_name_repetitions,
@@ -19,5 +19,22 @@ impl<T: BufMut> BufMutExt for T {}
 
 // TODO: Create derive_macro for this
 pub trait Encode {
-    fn encode<T: BufMut + ?Sized>(&self, buf: &mut T);
+    fn encode<B: BufMut + ?Sized>(&self, buf: &mut B);
+}
+
+#[expect(
+    clippy::module_name_repetitions,
+    reason = "Suitable here as it's an *Ext trait"
+)]
+pub trait BufExt: Buf {
+    fn get_decoded<T: Decode>(&mut self) -> T {
+        Decode::decode(self)
+    }
+}
+
+// Blanket implementation for any type that implements Buf.
+impl<T: Buf> BufExt for T {}
+
+pub trait Decode {
+    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self;
 }

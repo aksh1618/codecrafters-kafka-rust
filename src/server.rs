@@ -5,7 +5,10 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::api::{self, RequestHeaderV2, RequestMessageV2, RequestV2};
+use crate::{
+    api::{self, RequestV2},
+    buf::BufExt as _,
+};
 // For one-shot write
 // use bytes::{Buf as _, BufMut as _, Bytes};
 
@@ -37,22 +40,10 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
 fn read_next_request_for_response_v0(stream: &mut TcpStream) -> Result<()> {
     let request_message_v2 = read_request_v2(stream)?.message;
     let correlation_id = request_message_v2.header.correlation_id;
-    let buf = api::handle_request(request_message_v2);
-    let message_size = i32::try_from(size_of_val(&correlation_id) + buf.len())
-        .expect("message size shouldn't be large enough to wrap around when converted to i32");
-    // Simpler but multi-shot write
-    stream.write_all((message_size).to_be_bytes().as_slice())?;
-    stream.write_all((correlation_id).to_be_bytes().as_slice())?;
-    stream.write_all(&buf)?;
+    let response = api::handle_request(request_message_v2);
+    let message_size = response.message_size();
+    stream.write_all(&response.to_bytes())?;
     stream.flush()?;
-    // // One-shot but more complex write
-    // let response_size = size_of_val(&message_size) + message_size as usize;
-    // let response = (message_size.to_be_bytes().as_slice())
-    //     .chain(correlation_id.to_be_bytes().as_slice())
-    //     .chain(buf)
-    //     .copy_to_bytes(response_size);
-    // stream.write_all(&response)?;
-    // TODO: Decide whether this one-shot write will be more performant
     println!("Wrote and flushed {message_size}(+4) response bytes for {correlation_id}");
     Ok(())
 }
@@ -61,42 +52,26 @@ fn read_next_request_for_response_v0(stream: &mut TcpStream) -> Result<()> {
 /// 8 bytes: header (2 api key | 2 api version | 4 correlation id)
 /// Rest: Payload
 /// See: [Kafka protocol docs](https://kafka.apache.org/protocol.html)
+#[expect(
+    clippy::shadow_unrelated,
+    reason = "Sticking to consistent naming for readability"
+)]
 fn read_request_v2(stream: &mut TcpStream) -> Result<RequestV2> {
+    // read size
     let mut buf = [0; 4];
     stream.read_exact(&mut buf)?;
     println!("read 4 bytes for message size");
     let mut bytes = buf.as_slice();
     let size = bytes.get_i32();
     println!("request message size: {size}");
-    let header = read_request_header_v2(stream)?;
-    let remaining_bytes = (size - 8)
-        .try_into()
-        .expect("message size shouldn't be negative");
-    let mut payload = vec![0u8; remaining_bytes];
-    stream.read_exact(&mut payload)?;
-    let payload = payload.into();
-    println!("read remaining {remaining_bytes} bytes");
-    let message = RequestMessageV2 { header, payload };
-    Ok(RequestV2 { size, message })
-}
 
-/// 8 bytes: 2 api key | 2 api version | 4 correlation id
-/// See: [Kafka protocol docs](https://kafka.apache.org/protocol.html)
-fn read_request_header_v2(stream: &mut TcpStream) -> Result<RequestHeaderV2> {
-    let mut buf = [0; 8];
+    // read and decode message
+    let message_size = size.try_into().expect("message size shouldn't be negative");
+    let mut buf = vec![0u8; message_size];
     stream.read_exact(&mut buf)?;
-    println!("read 8 bytes for header");
     let mut bytes = buf.as_slice();
-    let api_key = bytes.get_i16();
-    let api_version = bytes.get_i16();
-    let correlation_id = bytes.get_i32();
-    let header = RequestHeaderV2 {
-        api_key,
-        api_version,
-        correlation_id,
-    };
-    println!("Parsed request message: {header:?}");
-    Ok(header)
+    let message = bytes.get_decoded();
+    Ok(RequestV2 { size, message })
 }
 
 #[allow(

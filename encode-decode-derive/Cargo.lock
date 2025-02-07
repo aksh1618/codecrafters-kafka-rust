@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "encode-derive"
+name = "encode-decode-derive"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",

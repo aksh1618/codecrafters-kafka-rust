@@ -20,15 +20,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
- "encode-derive",
+ "encode-decode-derive",
  "indoc",
  "paste",
+ "smart-default",
  "strum",
  "thiserror",
 ]
 
 [[package]]
-name = "encode-derive"
+name = "encode-decode-derive"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -77,6 +78,17 @@ name = "rustversion"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7c45b9784283f1b2e7fb61b42047c2fd678ef0960d4f6f1eba131594cc369d4"
+
+[[package]]
+name = "smart-default"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eb01866308440fc64d6c44d9e86c5cc17adfe33c4d6eed55da9145044d0ffc1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "strum"
