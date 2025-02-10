@@ -30,13 +30,13 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
 }
 
 fn create_response(request: &mut RequestMessageV2) -> Result<ResponsePayload> {
-    dbg!(&request);
+    // dbg!(&request);
     if let Some(error_code) = validate(request) {
         return Err(error_code);
     }
     let mut buf = BytesMut::new();
     let describe_partitions_request: DescribeTopicPartitionsRequest = request.payload.get_decoded();
-    dbg!(&describe_partitions_request);
+    // dbg!(&describe_partitions_request);
     let topics_response = describe_partitions_request
         .topics
         .elements
@@ -50,7 +50,7 @@ fn create_response(request: &mut RequestMessageV2) -> Result<ResponsePayload> {
             ..Default::default()
         })
         .collect::<Vec<_>>();
-    dbg!(&topics_response);
+    // dbg!(&topics_response);
     let response = DescribeTopicPartitionsResponse {
         topics: topics_response.into(),
         ..Default::default()
@@ -59,62 +59,79 @@ fn create_response(request: &mut RequestMessageV2) -> Result<ResponsePayload> {
     Ok(buf.into())
 }
 
-#[derive(Debug, Default, Decode)]
-struct DescribeTopicPartitionsRequest {
+#[derive(Debug, Default, Encode, Decode)]
+pub struct DescribeTopicPartitionsRequest {
     topics: CompactArray<TopicRequest>,
     response_partition_limit: Int32,
     cursor: Option<Cursor>,
     tag_buffer: TagBuffer,
 }
 
-#[derive(Debug, Default, Decode)]
+impl DescribeTopicPartitionsRequest {
+    pub fn new(topics: Vec<String>) -> Self {
+        Self {
+            topics: CompactArray::from(
+                topics
+                    .into_iter()
+                    .map(|topic| TopicRequest {
+                        name: CompactString::from(topic.as_str()),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Default, Encode, Decode)]
 struct TopicRequest {
     name: CompactString,
     tag_buffer: TagBuffer,
 }
 
 // https://github.com/apache/kafka/blob/trunk/clients/src/main/resources/common/message/DescribeTopicPartitionsResponse.json
-#[derive(Debug, Default, Encode)]
-struct DescribeTopicPartitionsResponse {
-    throttle_time_ms: Int32,
-    topics: CompactArray<DescribeTopicPartitionsResponseTopic>,
-    next_cursor: Option<Cursor>,
-    tag_buffer: TagBuffer,
+#[derive(Debug, Default, Encode, Decode)]
+pub struct DescribeTopicPartitionsResponse {
+    pub throttle_time_ms: Int32,
+    pub topics: CompactArray<DescribeTopicPartitionsResponseTopic>,
+    pub next_cursor: Option<Cursor>,
+    pub tag_buffer: TagBuffer,
 }
 
-#[derive(Debug, Default, Encode)]
-struct DescribeTopicPartitionsResponseTopic {
-    error_code: ErrorCode,
-    name: CompactNullableString,
-    topic_id: Uuid,
-    is_internal: Boolean,
-    partitions: CompactArray<DescribeTopicPartitionsResponsePartition>,
-    topic_authorized_operations: Int32,
-    tag_buffer: TagBuffer,
+#[derive(Debug, Default, Encode, Decode)]
+pub struct DescribeTopicPartitionsResponseTopic {
+    pub error_code: ErrorCode,
+    pub name: CompactNullableString,
+    pub topic_id: Uuid,
+    pub is_internal: Boolean,
+    pub partitions: CompactArray<DescribeTopicPartitionsResponsePartition>,
+    pub topic_authorized_operations: Int32,
+    pub tag_buffer: TagBuffer,
 }
 
 // See also:
 // - https://cwiki.apache.org/confluence/display/KAFKA/KIP-966%3A+Eligible+Leader+Replicas
 // - https://jack-vanlightly.com/blog/2023/8/17/kafka-kip-966-fixing-the-last-replica-standing-issue
-#[derive(Debug, Default, Encode)]
-struct DescribeTopicPartitionsResponsePartition {
-    error_code: ErrorCode,
-    partition_index: Int32,
-    leader_id: Int32,
-    leader_epoch: Int32,
-    replica_nodes: CompactArray<Int32>,
-    isr_nodes: CompactArray<Int32>, // isr -> in sync replicas
-    eligible_leader_replicas: CompactArray<Int32>,
-    last_known_elr: CompactArray<Int32>, // elr -> eligile leader replicas
-    offline_replicas: CompactArray<Int32>,
-    tag_buffer: TagBuffer,
+#[derive(Debug, Default, Encode, Decode)]
+pub struct DescribeTopicPartitionsResponsePartition {
+    pub error_code: ErrorCode,
+    pub partition_index: Int32,
+    pub leader_id: Int32,
+    pub leader_epoch: Int32,
+    pub replica_nodes: CompactArray<Int32>,
+    pub isr_nodes: CompactArray<Int32>, // isr -> in sync replicas
+    pub eligible_leader_replicas: CompactArray<Int32>,
+    pub last_known_elr: CompactArray<Int32>, // elr -> eligile leader replicas
+    pub offline_replicas: CompactArray<Int32>,
+    pub tag_buffer: TagBuffer,
 }
 
 #[derive(Debug, Default, Encode, Decode)]
-struct Cursor {
-    topic_name: CompactString,
-    partition_index: Int32,
-    tag_buffer: TagBuffer,
+pub struct Cursor {
+    pub topic_name: CompactString,
+    pub partition_index: Int32,
+    pub tag_buffer: TagBuffer,
 }
 
 impl buf::Encode for Option<Cursor> {

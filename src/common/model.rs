@@ -5,12 +5,11 @@
 
 use std::{io, result};
 
-use bytes::Buf;
-use bytes::{BufMut, Bytes, BytesMut};
-use encode_decode_derive::Encode;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use encode_decode_derive::{Decode, Encode};
 use paste::paste;
 use smart_default::SmartDefault;
-use strum::Display;
+use strum::{Display, FromRepr};
 use thiserror::Error;
 
 use super::buf::{BufExt as _, BufMutExt as _, Decode, Encode};
@@ -22,7 +21,7 @@ use super::buf::{BufExt as _, BufMutExt as _, Decode, Encode};
 /// > client language.
 /// > (From [Kafka protocol doc](https://kafka.apache.org/protocol.html#protocol_error_codes))
 #[repr(i16)]
-#[derive(Display, Debug, Default, Copy, Clone, Error, Encode)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Error, Display, FromRepr, Encode, Decode)]
 pub enum ErrorCode {
     UnknownServerError = -1,
     #[default]
@@ -97,11 +96,23 @@ impl Encode for Boolean {
         buf.put_u8(u8::from(*self));
     }
 }
+impl Decode for Boolean {
+    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
+        buf.get_u8() != 0
+    }
+}
 
 pub type Uuid = uuid::Uuid;
 impl Encode for Uuid {
     fn encode<T: BufMut + ?Sized>(&self, buf: &mut T) {
         buf.put_slice(self.as_bytes());
+    }
+}
+impl Decode for Uuid {
+    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
+        let mut bytes = [0; 16];
+        buf.copy_to_slice(&mut bytes);
+        Self::from_bytes(bytes)
     }
 }
 
@@ -153,10 +164,17 @@ impl_decode_int!(i16);
 impl_decode_int!(i32);
 impl_decode_int!(i64);
 
-#[derive(Debug, Default, Encode)]
+#[derive(Debug, Default)]
 pub struct CompactString {
     pub length: UnsignedVarint,
     pub value: Option<Bytes>,
+}
+
+impl Encode for CompactString {
+    fn encode<B: BufMut + ?Sized>(&self, mut buf: &mut B) {
+        buf.put_encoded(&(self.length + 1));
+        buf.put_encoded(&self.value);
+    }
 }
 
 impl Decode for CompactString {
@@ -173,11 +191,28 @@ impl Decode for CompactString {
     }
 }
 
-#[derive(Debug, SmartDefault)]
+impl From<&str> for CompactString {
+    fn from(value: &str) -> Self {
+        Self {
+            length: UnsignedVarint::try_from(value.len()).expect(
+                "Strings should be smaller than u8::max in length, probably time to refactor",
+            ),
+            value: Some(Bytes::from(value.to_string())),
+        }
+    }
+}
+
+#[derive(Debug, Encode, SmartDefault)]
 pub struct NullableString {
     #[default(-1_i16)]
     length: i16,
     value: Option<Bytes>,
+}
+
+impl NullableString {
+    pub fn encoded_size(&self) -> usize {
+        size_of_val(&self.length) + self.value.as_ref().map(Bytes::len).unwrap_or(0)
+    }
 }
 
 impl Decode for NullableString {
@@ -195,6 +230,16 @@ impl Decode for NullableString {
     }
 }
 
+impl From<&str> for NullableString {
+    fn from(value: &str) -> Self {
+        Self {
+            length: i16::try_from(value.len())
+                .expect("Nullable string should be smaller than i16::max in length"),
+            value: Some(Bytes::from(value.to_string())),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct CompactNullableString {
     pub length: UnsignedVarint,
@@ -205,6 +250,20 @@ impl Encode for CompactNullableString {
     fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
         buf.put_u8(self.length + 1);
         buf.put_encoded(&self.value);
+    }
+}
+
+impl Decode for CompactNullableString {
+    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
+        let length = buf.get_u8().saturating_sub(1);
+        if length == 0 {
+            return Self {
+                length: 0,
+                value: None,
+            };
+        }
+        let value = Some(buf.take(length.into()).get_decoded());
+        Self { length, value }
     }
 }
 
@@ -225,10 +284,5 @@ impl Encode for Bytes {
 impl Decode for Bytes {
     fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
         buf.copy_to_bytes(buf.remaining())
-        // let mut bytes = BytesMut::with_capacity(buf.remaining());
-        // buf.reader()
-        //     .read_exact(&mut bytes)
-        //     .unwrap_or_else(|_| panic!("Failed to read bytes from buffer"));
-        // bytes.freeze()
     }
 }

@@ -50,7 +50,7 @@ fn impl_decode_for_enum(enum_name: &Ident, enum_attrs: &[Attribute]) -> TokenStr
         impl crate::buf::Decode for #enum_name {
             fn decode<B: bytes::Buf + ?Sized>(mut buf: &mut B) -> Self {
                 let repr_value: #enum_repr = crate::buf::Decode::decode(buf);
-                Self::from_repr(repr_value)
+                Self::from_repr(repr_value).unwrap_or_else(|| panic!("Unsupported #enum_name {repr_value}"))
             }
         }
     }

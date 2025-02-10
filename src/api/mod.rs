@@ -8,12 +8,15 @@
     reason = "Going to evolve this as we go, so allowing some dead code for now"
 )]
 
-use crate::model::*;
+use crate::{
+    buf::{BufExt as _, BufMutExt as _},
+    model::*,
+};
 
 use api_versions::ApiVersionsV4;
-use bytes::{Buf as _, Bytes};
+use bytes::{Buf, Bytes, BytesMut};
 use describe_topic_partitions::DescribeTopicPartitionsV0;
-use encode_decode_derive::Decode;
+use encode_decode_derive::{Decode, Encode};
 use strum::{Display, EnumIter, FromRepr};
 
 pub mod api_versions;
@@ -47,18 +50,19 @@ impl TryFrom<ApiKey> for ApiKind {
     }
 }
 
+#[derive(Debug)]
 pub struct RequestV2 {
-    pub size: i32,
+    pub message_size: i32,
     pub message: RequestMessageV2,
 }
 
-#[derive(Debug, Default, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub struct RequestMessageV2 {
     pub header: RequestHeaderV2,
     pub payload: RequestPayload,
 }
 
-#[derive(Debug, Default, Decode)]
+#[derive(Debug, Default, Encode, Decode)]
 pub struct RequestHeaderV2 {
     pub api_key: ApiKey,
     pub api_version: ApiVersion,
@@ -67,6 +71,56 @@ pub struct RequestHeaderV2 {
     pub tag_buffer: TagBuffer,
 }
 
+impl RequestHeaderV2 {
+    // TODO: convert this into a trait, can this be added to Encode trait?
+    fn encoded_size(&self) -> usize {
+        size_of_val(&self.api_key)
+            + size_of_val(&self.api_version)
+            + size_of_val(&self.correlation_id)
+            + self.client_id.encoded_size()
+            + size_of_val(&self.tag_buffer)
+    }
+}
+
+impl RequestV2 {
+    pub fn new(
+        api_kind: ApiKind,
+        api_version: ApiVersion,
+        correlation_id: CorrelationId,
+        client_id: &str,
+        payload: RequestPayload,
+    ) -> Self {
+        let header = RequestHeaderV2 {
+            api_key: api_kind.into(),
+            api_version,
+            correlation_id,
+            client_id: NullableString::from(client_id),
+            ..Default::default()
+        };
+        let message_size = i32::try_from(header.encoded_size() + payload.len())
+            .expect("message size shouldn't be large enough to wrap around when converted to i32");
+        Self {
+            message_size,
+            message: RequestMessageV2 { header, payload },
+        }
+    }
+
+    pub fn into_bytes(self) -> Bytes {
+        let message_size = self.message_size;
+        let header = self.message.header;
+        let payload = self.message.payload;
+        let request_size = size_of_val(&message_size)
+            + usize::try_from(message_size).expect("message size should be non-negative");
+        let mut header_buf = BytesMut::with_capacity(header.encoded_size());
+        header_buf.put_encoded(&header);
+        (message_size.to_be_bytes().as_slice())
+            .chain(header_buf.freeze())
+            .chain(payload)
+            .copy_to_bytes(request_size)
+    }
+}
+
+#[derive(Debug, Decode)]
 pub struct ResponseV0 {
     pub message_size: i32,
     pub message: ResponseMessageV0,
@@ -83,14 +137,10 @@ pub struct ResponseHeaderV0 {
     pub correlation_id: CorrelationId,
 }
 
-pub struct ResponseV1 {
+#[derive(Debug)]
+pub struct Response {
     pub message_size: i32,
-    pub message: ResponseMessageV1,
-}
-
-pub enum Response {
-    V0(ResponseV0),
-    V1(ResponseV1),
+    pub message: ResponseMessage,
 }
 
 #[derive(Debug, Default, Decode)]
@@ -105,58 +155,91 @@ pub struct ResponseHeaderV1 {
     pub tag_buffer: TagBuffer,
 }
 
-impl Response {
+#[derive(Debug)]
+pub enum ResponseMessage {
+    V0(ResponseMessageV0),
+    V1(ResponseMessageV1),
+}
+
+impl ResponseMessage {
     pub fn new(api_kind: ApiKind, correlation_id: CorrelationId, payload: ResponsePayload) -> Self {
-        match api_kind {
-            ApiKind::ApiVersions => Self::new_v0(correlation_id, payload),
-            _ => Self::new_v1(correlation_id, payload),
+        if matches!(api_kind, ApiKind::ApiVersions) {
+            Self::new_v0(correlation_id, payload)
+        } else {
+            Self::new_v1(correlation_id, payload)
         }
     }
 
-    pub fn new_v0(correlation_id: CorrelationId, payload: ResponsePayload) -> Self {
-        let message_size = i32::try_from(size_of_val(&correlation_id) + payload.len())
-            .expect("message size shouldn't be large enough to wrap around when converted to i32");
-        Self::V0(ResponseV0 {
-            message_size,
-            message: ResponseMessageV0 {
-                header: ResponseHeaderV0 { correlation_id },
-                payload,
-            },
+    pub const fn new_v0(correlation_id: CorrelationId, payload: ResponsePayload) -> Self {
+        Self::V0(ResponseMessageV0 {
+            header: ResponseHeaderV0 { correlation_id },
+            payload,
         })
     }
 
     pub fn new_v1(correlation_id: CorrelationId, payload: ResponsePayload) -> Self {
         let tag_buffer = TagBuffer::default();
-        let message_size =
-            i32::try_from(size_of_val(&correlation_id) + size_of_val(&tag_buffer) + payload.len())
-                .expect(
-                    "message size shouldn't be large enough to wrap around when converted to i32",
-                );
-        Self::V1(ResponseV1 {
-            message_size,
-            message: ResponseMessageV1 {
-                header: ResponseHeaderV1 {
-                    correlation_id,
-                    tag_buffer,
-                },
-                payload,
+        Self::V1(ResponseMessageV1 {
+            header: ResponseHeaderV1 {
+                correlation_id,
+                tag_buffer,
             },
+            payload,
         })
     }
 
-    pub const fn message_size(&self) -> i32 {
+    fn encoded_size(&self) -> usize {
         match self {
-            Self::V0(response) => response.message_size,
-            Self::V1(response) => response.message_size,
+            Self::V0(response) => {
+                size_of_val(&response.header.correlation_id) + response.payload.len()
+            }
+            Self::V1(response) => {
+                size_of_val(&response.header.correlation_id)
+                    + size_of_val(&response.header.tag_buffer)
+                    + response.payload.len()
+            }
+        }
+    }
+
+    pub fn decode<B: Buf + ?Sized>(api_kind: ApiKind, mut buf: &mut B) -> Self {
+        if matches!(api_kind, ApiKind::ApiVersions) {
+            Self::V0(buf.get_decoded())
+        } else {
+            Self::V1(buf.get_decoded())
+        }
+    }
+
+    pub const fn correlation_id(&self) -> CorrelationId {
+        match self {
+            Self::V0(response) => response.header.correlation_id,
+            Self::V1(response) => response.header.correlation_id,
+        }
+    }
+
+    pub fn payload(self) -> ResponsePayload {
+        match self {
+            Self::V0(response) => response.payload,
+            Self::V1(response) => response.payload,
+        }
+    }
+}
+
+impl Response {
+    pub fn new(message: ResponseMessage) -> Self {
+        let message_size = i32::try_from(message.encoded_size())
+            .expect("message size shouldn't be large enough to wrap around when converted to i32");
+        Self {
+            message_size,
+            message,
         }
     }
 
     pub fn into_bytes(self) -> Bytes {
-        match self {
-            Self::V0(response) => {
-                let message_size = response.message_size;
-                let correlation_id = response.message.header.correlation_id;
-                let payload = response.message.payload;
+        match self.message {
+            ResponseMessage::V0(response) => {
+                let message_size = self.message_size;
+                let correlation_id = response.header.correlation_id;
+                let payload = response.payload;
                 let response_size = size_of_val(&message_size)
                     + usize::try_from(message_size).expect("message size should be non-negative");
                 (message_size.to_be_bytes().as_slice())
@@ -164,11 +247,11 @@ impl Response {
                     .chain(payload)
                     .copy_to_bytes(response_size)
             }
-            Self::V1(response) => {
-                let message_size = response.message_size;
-                let correlation_id = response.message.header.correlation_id;
-                let tag_buffer = response.message.header.tag_buffer;
-                let payload = response.message.payload;
+            ResponseMessage::V1(response) => {
+                let message_size = self.message_size;
+                let correlation_id = response.header.correlation_id;
+                let tag_buffer = response.header.tag_buffer;
+                let payload = response.payload;
                 let response_size = size_of_val(&message_size)
                     + size_of_val(&correlation_id)
                     + size_of_val(&tag_buffer)
@@ -188,6 +271,14 @@ pub type RequestPayload = Bytes;
 pub type ResponsePayload = Bytes;
 // pub type ResponsePayload<T: BufMut> = T;
 // pub struct ResponsePayload<T: BufMut>(T);
+// pub struct RequestPayload(Bytes);
+// impl<T: buf::Encode> From<T> for RequestPayload {
+//     fn from(request: T) -> Self {
+//         let mut buf = vec![];
+//         buf.put_encoded(&request);
+//         Self(buf.into())
+//     }
+// }
 
 #[expect(
     dead_code,
@@ -209,7 +300,7 @@ pub fn handle_request(request_message_v2: RequestMessageV2) -> Response {
     let api_kind = match api_key.try_into() {
         Ok(api_kind) => api_kind,
         Err::<_, ErrorCode>(error_code) => {
-            return Response::new_v0(correlation_id, error_code.into());
+            return Response::new(ResponseMessage::new_v0(correlation_id, error_code.into()));
         }
     };
 
@@ -222,11 +313,11 @@ pub fn handle_request(request_message_v2: RequestMessageV2) -> Response {
     let api_version = request_message_v2.header.api_version;
     let Some(api) = apis.iter().find(|api| api.api_version() == api_version) else {
         println!("Version {api_version} not supported for {api_kind} api");
-        return Response::new(
+        return Response::new(ResponseMessage::new(
             api_kind,
             correlation_id,
             ErrorCode::UnsupportedVersion.into(),
-        );
+        ));
     };
 
     let payload = match api.handle_request(request_message_v2) {
@@ -237,5 +328,5 @@ pub fn handle_request(request_message_v2: RequestMessageV2) -> Response {
         }
     };
 
-    Response::new(api_kind, correlation_id, payload)
+    Response::new(ResponseMessage::new(api_kind, correlation_id, payload))
 }

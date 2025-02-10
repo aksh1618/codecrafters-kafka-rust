@@ -9,8 +9,6 @@ use crate::{
     api::{self, RequestV2},
     buf::BufExt as _,
 };
-// For one-shot write
-// use bytes::{Buf as _, BufMut as _, Bytes};
 
 pub const ADDR: &str = "127.0.0.1:9092";
 
@@ -39,19 +37,16 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
 
 fn read_next_request_for_response_v0(stream: &mut TcpStream) -> Result<()> {
     let request_message_v2 = read_request_v2(stream)?.message;
+    dbg!(&request_message_v2);
     let correlation_id = request_message_v2.header.correlation_id;
     let response = api::handle_request(request_message_v2);
-    let message_size = response.message_size();
+    let message_size = response.message_size;
     stream.write_all(&response.into_bytes())?;
     stream.flush()?;
     println!("Wrote and flushed {message_size}(+4) response bytes for {correlation_id}");
     Ok(())
 }
 
-/// 4 bytes: message size
-/// 8 bytes: header (2 api key | 2 api version | 4 correlation id)
-/// Rest: Payload
-/// See: [Kafka protocol docs](https://kafka.apache.org/protocol.html)
 #[expect(
     clippy::shadow_unrelated,
     reason = "Sticking to consistent naming for readability"
@@ -71,7 +66,10 @@ fn read_request_v2(stream: &mut TcpStream) -> Result<RequestV2> {
     stream.read_exact(&mut buf)?;
     let mut bytes = buf.as_slice();
     let message = bytes.get_decoded();
-    Ok(RequestV2 { size, message })
+    Ok(RequestV2 {
+        message_size: size,
+        message,
+    })
 }
 
 #[allow(
@@ -83,8 +81,18 @@ fn read_request_v2(stream: &mut TcpStream) -> Result<RequestV2> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::{self, ADDR};
-    use bytes::BufMut as _;
+    use crate::{
+        api::{
+            describe_topic_partitions::{
+                DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
+            },
+            ApiKind, Response, ResponseMessage,
+        },
+        buf::{BufMutExt as _, Encode},
+        model::{ApiVersion, ErrorCode},
+        server::{self, ADDR},
+    };
+    use bytes::{BufMut as _, BytesMut};
     use indoc::indoc;
     use std::{
         io::Result,
@@ -94,6 +102,7 @@ mod tests {
         thread,
         time::Instant,
     };
+    use uuid::Uuid;
 
     static INIT: Once = Once::new();
     static INIT_RESULT: Mutex<Option<Result<()>>> = Mutex::new(None);
@@ -334,18 +343,71 @@ mod tests {
         println!("Time taken for 3 parallel requests: {time_taken_par:?}");
     }
 
-    // #[test]
-    // #[expect(clippy::unreadable_literal)]
-    // fn test_describe_topic_partitions_v0_request_response() -> Result<()> {
-    //     const CORRELATION_ID_3: i32 = 215707621i32;
-    //     ensure_server_running();
-    //     let mut stream = net::TcpStream::connect(ADDR)?;
-    //     Ok(())
-    // }
-    // Idx  | Hex                                             | ASCII
-    // -----+-------------------------------------------------+-----------------
-    // 0000 | 00 00 00 31 00 4b 00 00 56 77 e2 2e 00 0c 6b 61 | ...1.K..Vw....ka
-    // 0010 | 66 6b 61 2d 74 65 73 74 65 72 00 02 12 75 6e 6b | fka-tester...unk
-    // 0020 | 6e 6f 77 6e 2d 74 6f 70 69 63 2d 70 61 7a 00 00 | nown-topic-paz..
-    // 0030 | 00 00 01 ff 00                                  | .....
+    #[test]
+    fn test_describe_topic_partitions_v0_unknown_topic() -> Result<()> {
+        // Given
+        const TOPIC_NAME: &str = "unknown-topic-paz";
+
+        // When
+        let describe_topic_partitions_response =
+            perform_describe_topic_partitions_request(vec![TOPIC_NAME.to_string()])?;
+
+        // Then
+        assert_eq!(describe_topic_partitions_response.topics.length, 1);
+        let topic_details = &describe_topic_partitions_response.topics.elements[0];
+        assert_eq!(topic_details.error_code, ErrorCode::UnknownTopicOrPartition);
+        assert_eq!(topic_details.name.value.as_ref().unwrap(), TOPIC_NAME);
+        assert_eq!(topic_details.topic_id, Uuid::nil());
+        assert_eq!(topic_details.partitions.length, 0);
+        assert!(topic_details.partitions.elements.is_empty());
+        Ok(())
+    }
+
+    fn perform_describe_topic_partitions_request(
+        topics: Vec<String>,
+    ) -> Result<DescribeTopicPartitionsResponse> {
+        let describe_topic_partitions_request = DescribeTopicPartitionsRequest::new(topics);
+        let response = perform_request(
+            ApiKind::DescribeTopicPartitions,
+            0,
+            &describe_topic_partitions_request,
+        )?;
+        let describe_topic_partitions_response = response.message.payload().get_decoded();
+        Ok(describe_topic_partitions_response)
+    }
+
+    #[expect(clippy::unreadable_literal)]
+    fn perform_request(
+        api_kind: ApiKind,
+        api_version: ApiVersion,
+        api_request: &impl Encode,
+    ) -> Result<Response> {
+        // TODO: Switch to random i32?
+        const CORRELATION_ID: i32 = 215707621i32;
+        const CLIENT_ID: &str = "kafka-tester";
+        let mut payload = BytesMut::new();
+        payload.put_encoded(api_request);
+        let payload = payload.freeze();
+        let request = RequestV2::new(api_kind, api_version, CORRELATION_ID, CLIENT_ID, payload);
+        ensure_server_running();
+        let mut stream = net::TcpStream::connect(ADDR)?;
+        let api_kind = request.message.header.api_key.try_into().unwrap();
+        let correlation_id = request.message.header.correlation_id;
+        let bytes = &request.into_bytes();
+        stream.write_all(bytes)?;
+        let mut buf = [0; 4];
+        stream.read_exact(&mut buf)?;
+        println!("read 4 bytes for message size");
+        let mut bytes = buf.as_slice();
+        let size = bytes.get_i32();
+        println!("response message size: {size}");
+        let message_size = size.try_into().expect("message size shouldn't be negative");
+        let mut buf = vec![0u8; message_size];
+        stream.read_exact(&mut buf)?;
+        let mut bytes = buf.as_slice();
+        let response_message = ResponseMessage::decode(api_kind, &mut bytes);
+        dbg!(&response_message);
+        assert_eq!(response_message.correlation_id(), correlation_id);
+        Ok(Response::new(response_message))
+    }
 }
