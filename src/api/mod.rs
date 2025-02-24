@@ -9,7 +9,7 @@
 )]
 
 use crate::{
-    buf::{BufExt as _, BufMutExt as _},
+    buf::{self, BufExt as _, BufMutExt as _, Decode as _},
     model::*,
 };
 
@@ -56,7 +56,7 @@ pub struct RequestV2 {
     pub message: RequestMessageV2,
 }
 
-#[derive(Debug, Default, Encode, Decode)]
+#[derive(Debug, Default, Encode)]
 pub struct RequestMessageV2 {
     pub header: RequestHeaderV2,
     pub payload: RequestPayload,
@@ -126,7 +126,7 @@ pub struct ResponseV0 {
     pub message: ResponseMessageV0,
 }
 
-#[derive(Debug, Default, Decode)]
+#[derive(Debug, Default)]
 pub struct ResponseMessageV0 {
     pub header: ResponseHeaderV0,
     pub payload: ResponsePayload,
@@ -143,7 +143,7 @@ pub struct Response {
     pub message: ResponseMessage,
 }
 
-#[derive(Debug, Default, Decode)]
+#[derive(Debug, Default)]
 pub struct ResponseMessageV1 {
     pub header: ResponseHeaderV1,
     pub payload: ResponsePayload,
@@ -329,4 +329,28 @@ pub fn handle_request(request_message_v2: RequestMessageV2) -> Response {
     };
 
     Response::new(ResponseMessage::new(api_kind, correlation_id, payload))
+}
+
+impl buf::Decode for RequestMessageV2 {
+    fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
+        let header = buf.get_decoded();
+        let payload = buf.copy_to_bytes(buf.remaining());
+        Self { header, payload }
+    }
+}
+
+impl buf::Decode for ResponseMessageV0 {
+    fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
+        let header = buf.get_decoded();
+        let payload = buf.copy_to_bytes(buf.remaining());
+        Self { header, payload }
+    }
+}
+
+impl buf::Decode for ResponseMessageV1 {
+    fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
+        let header = buf.get_decoded();
+        let payload = buf.copy_to_bytes(buf.remaining());
+        Self { header, payload }
+    }
 }

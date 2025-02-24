@@ -186,7 +186,7 @@ impl Decode for CompactString {
                 value: Some(Bytes::new()),
             };
         }
-        let value = Some(buf.take(length.into()).get_decoded());
+        let value = Some(buf.copy_to_bytes(length.into()));
         Self { length, value }
     }
 }
@@ -225,7 +225,7 @@ impl Decode for NullableString {
             };
         }
         let string_length = length.try_into().expect("length should be non-negative");
-        let value = Some(buf.take(string_length).get_decoded());
+        let value = Some(buf.copy_to_bytes(string_length));
         Self { length, value }
     }
 }
@@ -262,7 +262,7 @@ impl Decode for CompactNullableString {
                 value: None,
             };
         }
-        let value = Some(buf.take(length.into()).get_decoded());
+        let value = Some(buf.copy_to_bytes(length.into()));
         Self { length, value }
     }
 }
@@ -278,11 +278,5 @@ impl Encode for Option<Bytes> {
 impl Encode for Bytes {
     fn encode<B: BufMut + ?Sized>(&self, buf: &mut B) {
         buf.put_slice(self);
-    }
-}
-
-impl Decode for Bytes {
-    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
-        buf.copy_to_bytes(buf.remaining())
     }
 }
