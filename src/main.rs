@@ -2,6 +2,7 @@ use std::io::Result;
 
 mod api;
 pub mod common;
+mod log;
 mod server;
 
 pub use common::buf;

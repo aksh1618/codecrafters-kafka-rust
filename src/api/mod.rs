@@ -9,7 +9,7 @@
 )]
 
 use crate::{
-    buf::{self, BufExt as _, BufMutExt as _, Decode as _},
+    buf::{self, BufExt as _, BufMutExt as _},
     model::*,
 };
 
