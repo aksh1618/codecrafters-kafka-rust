@@ -470,6 +470,17 @@ pub struct CompactNullableString {
     pub value: Option<Bytes>,
 }
 
+impl From<Bytes> for CompactNullableString {
+    fn from(value: Bytes) -> Self {
+        Self {
+            length: UnsignedVarint::try_from(value.len()).expect(
+                "Strings should be smaller than u8::max in length, probably time to refactor",
+            ),
+            value: Some(value),
+        }
+    }
+}
+
 impl Encode for CompactNullableString {
     fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
         buf.put_u8(self.length + 1);
