@@ -155,3 +155,54 @@ impl buf::Decode for Option<Cursor> {
         })
     }
 }
+
+#[allow(clippy::restriction)]
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{
+        api::{
+            describe_topic_partitions::{
+                DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
+            },
+            ApiKind,
+        },
+        log::test::write_test_data_to_cluster_metadata_log_file,
+        server::tests::perform_request,
+    };
+    use std::io::Result;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_describe_topic_partitions_v0_unknown_topic() -> Result<()> {
+        // Given
+        const TOPIC_NAME: &str = "unknown-topic-paz";
+
+        // When
+        let describe_topic_partitions_response =
+            perform_describe_topic_partitions_request(vec![TOPIC_NAME.to_string()])?;
+
+        // Then
+        assert_eq!(describe_topic_partitions_response.topics.length, 1);
+        let topic_details = &describe_topic_partitions_response.topics.elements[0];
+        assert_eq!(topic_details.error_code, ErrorCode::UnknownTopicOrPartition);
+        assert_eq!(topic_details.name.value.as_ref().unwrap(), TOPIC_NAME);
+        assert_eq!(topic_details.topic_id, Uuid::nil());
+        assert_eq!(topic_details.partitions.length, 0);
+        assert!(topic_details.partitions.elements.is_empty());
+        Ok(())
+    }
+
+    fn perform_describe_topic_partitions_request(
+        topics: Vec<String>,
+    ) -> Result<DescribeTopicPartitionsResponse> {
+        let describe_topic_partitions_request = DescribeTopicPartitionsRequest::new(topics);
+        let response = perform_request(
+            ApiKind::DescribeTopicPartitions,
+            0,
+            &describe_topic_partitions_request,
+        )?;
+        let describe_topic_partitions_response = response.message.payload().get_decoded();
+        Ok(describe_topic_partitions_response)
+    }
+}
