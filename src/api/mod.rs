@@ -17,22 +17,26 @@ use api_versions::ApiVersionsV4;
 use bytes::{Buf, Bytes, BytesMut};
 use describe_topic_partitions::DescribeTopicPartitionsV0;
 use encode_decode_derive::{Decode, Encode};
+use fetch::FetchV16;
 use strum::{Display, EnumIter, FromRepr};
 
 pub mod api_versions;
 pub mod describe_topic_partitions;
+pub mod fetch;
 
 #[derive(Display, Debug, Clone, Copy, FromRepr, EnumIter)]
 #[repr(i16)]
 pub enum ApiKind {
     ApiVersions = 18,
     DescribeTopicPartitions = 75,
+    Fetch = 1,
 }
 
 pub fn apis_for_kind(api_kind: ApiKind) -> Vec<Box<dyn KafkaBrokerApi>> {
     match api_kind {
         ApiKind::ApiVersions => vec![Box::new(ApiVersionsV4)],
         ApiKind::DescribeTopicPartitions => vec![Box::new(DescribeTopicPartitionsV0)],
+        ApiKind::Fetch => vec![Box::new(FetchV16)],
     }
 }
 

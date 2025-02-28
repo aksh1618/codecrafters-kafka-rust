@@ -148,7 +148,7 @@ mod test {
         let error_code = bytes.get_i16();
         assert_eq!(error_code, 0i16);
         let num_api_keys = bytes.get_u8() - 1;
-        assert_eq!(num_api_keys, 2u8);
+        assert_eq!(num_api_keys, 3u8);
         let apiversions_api_key = bytes.get_i16();
         assert_eq!(apiversions_api_key, 18i16);
         let apiversions_min_version = bytes.get_i16();
@@ -163,6 +163,14 @@ mod test {
         assert_eq!(describe_topic_partitions_min_version, 0i16);
         let describe_topic_partitions_max_version = bytes.get_i16();
         assert_eq!(describe_topic_partitions_max_version, 0i16);
+        let tag_buffer = bytes.get_i8();
+        assert_eq!(tag_buffer, 0i8);
+        let fetch_api_key = bytes.get_i16();
+        assert_eq!(fetch_api_key, 1i16);
+        let fetch_min_version = bytes.get_i16();
+        assert_eq!(fetch_min_version, 16i16);
+        let fetch_max_version = bytes.get_i16();
+        assert_eq!(fetch_max_version, 16i16);
         let tag_buffer = bytes.get_i8();
         assert_eq!(tag_buffer, 0i8);
         let throttle_time_ms = bytes.get_i32();
