@@ -24,7 +24,17 @@ impl KafkaBrokerApi for DescribeTopicPartitionsV0 {
     }
 
     fn handle_request(&self, mut request: RequestMessageV2) -> Result<ResponsePayload> {
-        create_response(&mut request)
+        // dbg!(&request);
+        if let Some(error_code) = validate(&request) {
+            return Err(error_code);
+        }
+        let request = request.payload.get_decoded();
+        // dbg!(&request);
+
+        let response = create_response(request)?;
+        let mut buf = BytesMut::new();
+        buf.put_encoded(&response);
+        Ok(buf.into())
     }
 }
 
@@ -35,18 +45,14 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
     None
 }
 
-fn create_response(request: &mut RequestMessageV2) -> Result<ResponsePayload> {
-    // dbg!(&request);
-    if let Some(error_code) = validate(request) {
-        return Err(error_code);
-    }
-    let mut buf = BytesMut::new();
-    let describe_partitions_request: DescribeTopicPartitionsRequest = request.payload.get_decoded();
-    // dbg!(&describe_partitions_request);
+fn create_response(
+    request: DescribeTopicPartitionsRequest,
+) -> Result<DescribeTopicPartitionsResponse> {
     let record_batches = read_records(Path::new(CLUSTER_METADATA_PATH)).map_err(|e| {
         println!("Failed reading cluster metadata file from {CLUSTER_METADATA_PATH}: {e}");
         ErrorCode::UnknownServerError
     })?;
+
     let mut topic_records = HashMap::new();
     let mut topic_wise_partition_records = HashMap::new();
     #[expect(
@@ -76,7 +82,7 @@ fn create_response(request: &mut RequestMessageV2) -> Result<ResponsePayload> {
             _ => (),
         });
 
-    let topics_response = describe_partitions_request
+    let topics_response = request
         .topics
         .elements
         .into_iter()
@@ -96,8 +102,8 @@ fn create_response(request: &mut RequestMessageV2) -> Result<ResponsePayload> {
         topics: topics_response.into(),
         ..Default::default()
     };
-    buf.put_encoded(&response);
-    Ok(buf.into())
+
+    Ok(response)
 }
 
 fn get_topic_response_for_topic(

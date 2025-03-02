@@ -104,7 +104,7 @@ impl<Item: Encode> Encode for Array<Item> {
             Int32::try_from(len).expect(
                 "Arrays should be smaller than i32::max in length, was this supposed to be a compact array instead?",
             )
-            );
+        );
         for x in &self.elements {
             buf.put_encoded(x);
         }

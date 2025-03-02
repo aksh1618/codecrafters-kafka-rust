@@ -21,7 +21,17 @@ impl KafkaBrokerApi for ApiVersionsV4 {
     }
 
     fn handle_request(&self, request: RequestMessageV2) -> Result<ResponsePayload> {
-        create_response(&request)
+        // dbg!(&request);
+        if let Some(error_code) = validate(&request) {
+            return Err(error_code);
+        }
+        // let request = request.payload.get_decoded();
+        // dbg!(&request);
+
+        let response = create_response(request);
+        let mut buf = BytesMut::new();
+        buf.put_encoded(&response);
+        Ok(buf.into())
     }
 }
 
@@ -32,17 +42,12 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
     None
 }
 
-fn create_response(request: &RequestMessageV2) -> Result<ResponsePayload> {
-    if let Some(error_code) = validate(request) {
-        return Err(error_code);
-    }
+fn create_response(_request: RequestMessageV2) -> ApiVersionsResponsePayload {
     let apis = ApiKind::iter()
         .map(ApiVersionSpec::from)
         .collect::<Vec<_>>();
-    let apis = ApiVersionsResponsePayload::from(apis);
-    let mut buf = BytesMut::new();
-    buf.put_encoded(&apis);
-    Ok(buf.into())
+
+    ApiVersionsResponsePayload::from(apis)
 }
 
 #[derive(Debug, Default, Encode)]
