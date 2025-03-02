@@ -29,6 +29,7 @@ pub enum ErrorCode {
     UnknownTopicOrPartition = 3,
     UnsupportedVersion = 35,
     InvalidRequest = 42,
+    UnknownTopicId = 100,
     // TODO: Add more from https://kafka.apache.org/protocol.html#protocol_error_codes
 }
 

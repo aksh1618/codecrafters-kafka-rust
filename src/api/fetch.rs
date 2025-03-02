@@ -41,8 +41,30 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
     None
 }
 
-fn create_response(_request: FetchRequest) -> FetchResponse {
-    FetchResponse::default()
+fn create_response(request: FetchRequest) -> FetchResponse {
+    let responses = request
+        .topics
+        .elements
+        .into_iter()
+        .map(|topic| FetchableTopicResponse {
+            topic_id: topic.topic_id,
+            partitions: get_partitions_response(topic),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    FetchResponse {
+        responses,
+        ..Default::default()
+    }
+}
+
+fn get_partitions_response(topic: FetchTopic) -> CompactArray<PartitionData> {
+    vec![PartitionData {
+        error_code: ErrorCode::UnknownTopicId,
+        ..Default::default()
+    }]
+    .into()
 }
 
 // https://github.com/apache/kafka/blob/trunk/clients/src/main/resources/common/message/FetchRequest.json
@@ -207,6 +229,28 @@ mod test {
         assert_eq!(fetch_response.throttle_time_ms, 0);
         assert_eq!(fetch_response.session_id, 0);
         assert_eq!(fetch_response.responses.length, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_fetch_v16_unknown_topic() -> Result<()> {
+        // Given
+        const UNKNOWN_TOPIC_ID: Uuid = Uuid::max();
+        const TOPICS: &[Uuid] = &[UNKNOWN_TOPIC_ID];
+
+        // When
+        let fetch_response = perform_fetch_request(TOPICS.to_vec())?;
+
+        // Then
+        dbg!(&fetch_response);
+        assert_eq!(fetch_response.throttle_time_ms, 0);
+        assert_eq!(fetch_response.session_id, 0);
+        assert_eq!(fetch_response.responses.length, 1);
+        let response = &fetch_response.responses.elements[0];
+        assert_eq!(response.topic_id, UNKNOWN_TOPIC_ID);
+        assert_eq!(response.partitions.length, 1);
+        let partition_data = &response.partitions.elements[0];
+        assert_eq!(partition_data.error_code, ErrorCode::UnknownTopicId);
         Ok(())
     }
 
