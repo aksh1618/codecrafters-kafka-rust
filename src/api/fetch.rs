@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use encode_decode_derive::{Decode, Encode};
 
 use super::{RequestMessageV2, ResponsePayload};
 use crate::api::{ApiKind, KafkaBrokerApi};
 use crate::buf::{BufExt as _, BufMutExt as _};
-use crate::log::{read_records, Record, RecordBatch, RecordMessage, CLUSTER_METADATA_PATH};
+use crate::log::{read_records, Record, RecordMessage, CLUSTER_METADATA_PATH};
 use crate::model::*;
 
 // #[derive(Debug, Clone, Copy, Default)]
@@ -34,8 +34,21 @@ impl KafkaBrokerApi for FetchV16 {
             println!("Failed reading cluster metadata file from {CLUSTER_METADATA_PATH}: {e}");
             ErrorCode::UnknownServerError
         })?;
+        let mut topic_names = HashMap::new();
+        cluster_metadata
+            .elements
+            .iter()
+            .flat_map(|record_batch| &record_batch.records.elements)
+            .map(|record| &record.value.message)
+            .for_each(|record_message| {
+                if let RecordMessage::TopicRecord(topic_record) = record_message {
+                    if let Some(topic_name) = &topic_record.name.value {
+                        topic_names.insert(topic_record.topic_id, topic_name.clone());
+                    }
+                }
+            });
 
-        let response = create_response(request, &cluster_metadata.elements);
+        let response = create_response(request, &topic_names);
         let mut buf = BytesMut::new();
         buf.put_encoded(&response);
         Ok(buf.into())
@@ -49,14 +62,14 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
     None
 }
 
-fn create_response(request: FetchRequest, cluster_metadata: &[RecordBatch]) -> FetchResponse {
+fn create_response(request: FetchRequest, topic_names: &HashMap<Uuid, Bytes>) -> FetchResponse {
     let responses = request
         .topics
         .elements
         .into_iter()
         .map(|topic| FetchableTopicResponse {
             topic_id: topic.topic_id,
-            partitions: get_partitions_response(&topic, cluster_metadata),
+            partitions: get_partitions_response(&topic, topic_names.get(&topic.topic_id)),
             ..Default::default()
         })
         .collect::<Vec<_>>()
@@ -69,28 +82,18 @@ fn create_response(request: FetchRequest, cluster_metadata: &[RecordBatch]) -> F
 
 fn get_partitions_response(
     topic: &FetchTopic,
-    cluster_metadata: &[RecordBatch],
+    topic_name: Option<&Bytes>,
 ) -> CompactArray<PartitionData> {
-    // TODO: Pre-compute a map of topic_id to topic_name instead of finding it every time here?
-    let topic_name = cluster_metadata
-        .iter()
-        .flat_map(|record_batch| &record_batch.records.elements)
-        .map(|record| &record.value.message)
-        .find_map(|record_message| {
-            if let RecordMessage::TopicRecord(topic_record) = record_message {
-                if topic_record.topic_id == topic.topic_id {
-                    return topic_record.name.value.clone();
-                }
-            }
-            None
-        });
-    let error_code = if topic_name.is_none() {
-        ErrorCode::UnknownTopicId
-    } else {
-        ErrorCode::None
+    let Some(topic_name) = topic_name else {
+        let vec = vec![PartitionData {
+            error_code: ErrorCode::UnknownTopicId,
+            ..Default::default()
+        }];
+        return vec.into();
     };
+
     vec![PartitionData {
-        error_code,
+        error_code: ErrorCode::None,
         ..Default::default()
     }]
     .into()
