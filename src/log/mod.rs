@@ -212,15 +212,13 @@ pub mod test {
 
     #[test]
     fn test_record_batch_read() -> anyhow::Result<()> {
-        write_test_data_to_cluster_metadata_log_file()?;
-
-        let record_batches = read_records(Path::new(CLUSTER_METADATA_PATH))?;
+        let record_batches = write_test_data_to_cluster_metadata_log_file()?;
         // dbg!(&record_batches);
         assert!(!record_batches.elements.is_empty());
         Ok(())
     }
 
-    pub fn write_test_data_to_cluster_metadata_log_file() -> Result<()> {
+    pub fn write_test_data_to_cluster_metadata_log_file() -> Result<RecordBatches> {
         let data: &[u8] = b"\
             \x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x4f\x00\x00\x00\x01\x02\xb0\x69\x45\x7c\
             \x00\x00\x00\x00\x00\x00\x00\x00\x01\x91\xe0\x5a\xf8\x18\x00\x00\x01\x91\xe0\x5a\xf8\
@@ -259,6 +257,7 @@ pub mod test {
         }
         let mut file = fs::File::create(CLUSTER_METADATA_PATH)?;
         file.write_all(data)?;
-        Ok(())
+        let record_batches = read_records(Path::new(CLUSTER_METADATA_PATH)).unwrap();
+        Ok(record_batches)
     }
 }

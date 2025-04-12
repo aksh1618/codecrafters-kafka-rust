@@ -1,10 +1,13 @@
+use std::collections::HashMap;
+use std::path::Path;
+
 use bytes::BytesMut;
 use encode_decode_derive::{Decode, Encode};
 
 use super::{RequestMessageV2, ResponsePayload};
 use crate::api::{ApiKind, KafkaBrokerApi};
 use crate::buf::{BufExt as _, BufMutExt as _};
-use crate::log::Record;
+use crate::log::{read_records, Record, RecordBatch, RecordMessage, CLUSTER_METADATA_PATH};
 use crate::model::*;
 
 // #[derive(Debug, Clone, Copy, Default)]
@@ -27,7 +30,12 @@ impl KafkaBrokerApi for FetchV16 {
         let request = request.payload.get_decoded();
         dbg!(&request);
 
-        let response = create_response(request);
+        let cluster_metadata = read_records(Path::new(CLUSTER_METADATA_PATH)).map_err(|e| {
+            println!("Failed reading cluster metadata file from {CLUSTER_METADATA_PATH}: {e}");
+            ErrorCode::UnknownServerError
+        })?;
+
+        let response = create_response(request, &cluster_metadata.elements);
         let mut buf = BytesMut::new();
         buf.put_encoded(&response);
         Ok(buf.into())
@@ -41,14 +49,14 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
     None
 }
 
-fn create_response(request: FetchRequest) -> FetchResponse {
+fn create_response(request: FetchRequest, cluster_metadata: &[RecordBatch]) -> FetchResponse {
     let responses = request
         .topics
         .elements
         .into_iter()
         .map(|topic| FetchableTopicResponse {
             topic_id: topic.topic_id,
-            partitions: get_partitions_response(topic),
+            partitions: get_partitions_response(&topic, cluster_metadata),
             ..Default::default()
         })
         .collect::<Vec<_>>()
@@ -59,9 +67,30 @@ fn create_response(request: FetchRequest) -> FetchResponse {
     }
 }
 
-fn get_partitions_response(topic: FetchTopic) -> CompactArray<PartitionData> {
+fn get_partitions_response(
+    topic: &FetchTopic,
+    cluster_metadata: &[RecordBatch],
+) -> CompactArray<PartitionData> {
+    // TODO: Pre-compute a map of topic_id to topic_name instead of finding it every time here?
+    let topic_name = cluster_metadata
+        .iter()
+        .flat_map(|record_batch| &record_batch.records.elements)
+        .map(|record| &record.value.message)
+        .find_map(|record_message| {
+            if let RecordMessage::TopicRecord(topic_record) = record_message {
+                if topic_record.topic_id == topic.topic_id {
+                    return topic_record.name.value.clone();
+                }
+            }
+            None
+        });
+    let error_code = if topic_name.is_none() {
+        ErrorCode::UnknownTopicId
+    } else {
+        ErrorCode::None
+    };
     vec![PartitionData {
-        error_code: ErrorCode::UnknownTopicId,
+        error_code,
         ..Default::default()
     }]
     .into()
@@ -213,7 +242,9 @@ pub struct AbortedTransaction {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::server::tests::perform_request;
+    use crate::{
+        log::test::write_test_data_to_cluster_metadata_log_file, server::tests::perform_request,
+    };
     use anyhow::Result;
 
     #[test]
@@ -251,6 +282,41 @@ mod test {
         assert_eq!(response.partitions.length, 1);
         let partition_data = &response.partitions.elements[0];
         assert_eq!(partition_data.error_code, ErrorCode::UnknownTopicId);
+        Ok(())
+    }
+
+    #[test]
+    fn test_fetch_v16_empty_topic() -> Result<()> {
+        // Given
+        let record_batches = write_test_data_to_cluster_metadata_log_file()?;
+        let empty_topic_id = record_batches
+            .elements
+            .into_iter()
+            .flat_map(|record_batch| record_batch.records.elements)
+            .map(|record| record.value.message)
+            .find_map(|record_message| {
+                if let RecordMessage::TopicRecord(topic_record) = record_message {
+                    Some(topic_record.topic_id)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let topics = &[empty_topic_id];
+
+        // When
+        let fetch_response = perform_fetch_request(topics.to_vec())?;
+
+        // Then
+        dbg!(&fetch_response);
+        assert_eq!(fetch_response.throttle_time_ms, 0);
+        assert_eq!(fetch_response.session_id, 0);
+        assert_eq!(fetch_response.responses.length, 1);
+        let response = &fetch_response.responses.elements[0];
+        assert_eq!(response.topic_id, empty_topic_id);
+        assert_eq!(response.partitions.length, 1);
+        let partition_data = &response.partitions.elements[0];
+        assert_eq!(partition_data.error_code, ErrorCode::None);
         Ok(())
     }
 
