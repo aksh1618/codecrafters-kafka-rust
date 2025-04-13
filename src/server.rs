@@ -19,7 +19,7 @@ pub fn start_server() -> Result<JoinHandle<()>> {
             thread::spawn(move || {
                 if let Err(e) = stream.map(handle_connection_response_v0) {
                     println!("Encountered error: {e}");
-                };
+                }
             });
         }
     });
@@ -31,7 +31,7 @@ fn handle_connection_response_v0(mut stream: TcpStream) -> Result<()> {
         if let Err(e) = read_next_request_for_response_v0(&mut stream) {
             println!("Closed connection: [{}: {e}]", e.kind());
             break Ok(());
-        };
+        }
     }
 }
 

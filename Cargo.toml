@@ -8,7 +8,8 @@ rust-version = "1.82"
 [dependencies]
 anyhow = "1.0.95"                                     # error handling         #
 bytes = "1.9.0"                                       # helps manage buffers   #
-encode-decode-derive = { version = "0.1.0", path = "encode-decode-derive" }                  #
+crc32c = "0.6.8"                                      # CRC-32-Castagnoli impl #
+encode-decode-derive = { version = "0.1.0", path = "encode-decode-derive" }    #
 paste = "1.0.15"                                      # helps with macro magic #
 smart-default = "0.7.1"                               # simpler default impls  #
 strum = { version = "0.26.3", features = ["derive"] } # enum utils             #

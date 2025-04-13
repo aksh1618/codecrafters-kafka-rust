@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 
 use bytes::{Bytes, BytesMut};
 use encode_decode_derive::{Decode, Encode};
@@ -7,7 +6,10 @@ use encode_decode_derive::{Decode, Encode};
 use super::{RequestMessageV2, ResponsePayload};
 use crate::api::{ApiKind, KafkaBrokerApi};
 use crate::buf::{BufExt as _, BufMutExt as _};
-use crate::log::{read_records, Record, RecordMessage, CLUSTER_METADATA_PATH};
+use crate::log::{
+    read_metadata_records, read_raw_records, MetadataRecordMessage, RecordBatch,
+    CLUSTER_METADATA_PATH,
+};
 use crate::model::*;
 
 // #[derive(Debug, Clone, Copy, Default)]
@@ -23,30 +25,24 @@ impl KafkaBrokerApi for FetchV16 {
     }
 
     fn handle_request(&self, mut request: RequestMessageV2) -> Result<ResponsePayload> {
-        dbg!(&request);
         if let Some(error_code) = validate(&request) {
             return Err(error_code);
         }
         let request = request.payload.get_decoded();
-        dbg!(&request);
 
-        let cluster_metadata = read_records(Path::new(CLUSTER_METADATA_PATH)).map_err(|e| {
-            println!("Failed reading cluster metadata file from {CLUSTER_METADATA_PATH}: {e}");
+        let metadata_records = read_metadata_records().map_err(|e| {
+            eprintln!("Failed reading cluster metadata file from {CLUSTER_METADATA_PATH}: {e}");
             ErrorCode::UnknownServerError
         })?;
         let mut topic_names = HashMap::new();
-        cluster_metadata
-            .elements
-            .iter()
-            .flat_map(|record_batch| &record_batch.records.elements)
-            .map(|record| &record.value.message)
-            .for_each(|record_message| {
-                if let RecordMessage::TopicRecord(topic_record) = record_message {
-                    if let Some(topic_name) = &topic_record.name.value {
-                        topic_names.insert(topic_record.topic_id, topic_name.clone());
-                    }
+        for record in metadata_records {
+            // Soft TODO: if-let-chains?!
+            if let MetadataRecordMessage::TopicRecord(topic_record) = record {
+                if let Some(topic_name) = &topic_record.name.value {
+                    topic_names.insert(topic_record.topic_id, topic_name.clone());
                 }
-            });
+            }
+        }
 
         let response = create_response(request, &topic_names);
         let mut buf = BytesMut::new();
@@ -69,7 +65,7 @@ fn create_response(request: FetchRequest, topic_names: &HashMap<Uuid, Bytes>) ->
         .into_iter()
         .map(|topic| FetchableTopicResponse {
             topic_id: topic.topic_id,
-            partitions: get_partitions_response(&topic, topic_names.get(&topic.topic_id)),
+            partitions: get_partitions_response_for_topic(&topic, topic_names.get(&topic.topic_id)),
             ..Default::default()
         })
         .collect::<Vec<_>>()
@@ -80,7 +76,7 @@ fn create_response(request: FetchRequest, topic_names: &HashMap<Uuid, Bytes>) ->
     }
 }
 
-fn get_partitions_response(
+fn get_partitions_response_for_topic(
     topic: &FetchTopic,
     topic_name: Option<&Bytes>,
 ) -> CompactArray<PartitionData> {
@@ -92,11 +88,34 @@ fn get_partitions_response(
         return vec.into();
     };
 
-    vec![PartitionData {
-        error_code: ErrorCode::None,
+    topic
+        .partitions
+        .elements
+        .iter()
+        .map(|partition| get_partition_response_for_topic_and_partition(topic_name, partition))
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn get_partition_response_for_topic_and_partition(
+    topic_name: &Bytes,
+    partition: &FetchPartition,
+) -> PartitionData {
+    let record_batches = match read_raw_records(topic_name, partition.partition) {
+        Err(e) => {
+            eprintln!("Failed reading partition log file: {e}");
+            return PartitionData {
+                error_code: ErrorCode::UnknownServerError,
+                ..Default::default()
+            };
+        }
+        Ok(record_batches) => record_batches,
+    };
+    let records = record_batches.elements.into();
+    PartitionData {
+        records,
         ..Default::default()
-    }]
-    .into()
+    }
 }
 
 // https://github.com/apache/kafka/blob/trunk/clients/src/main/resources/common/message/FetchRequest.json
@@ -157,6 +176,7 @@ impl FetchRequest {
                     .into_iter()
                     .map(|topic_id| FetchTopic {
                         topic_id,
+                        partitions: vec![FetchPartition::default()].into(),
                         ..Default::default()
                     })
                     .collect::<Vec<_>>(),
@@ -196,7 +216,15 @@ pub struct PartitionData {
     // pub snapshot_id: SnapshotId,
     pub aborted_transactions: CompactArray<AbortedTransaction>,
     pub preferred_read_replica: Int32,
-    pub records: CompactArray<Record>, // TODO: Verify this correctly represents `COMPACT_RECORDS`
+    // The exact type of this was tough to find, got a hint from
+    // https://rohithsankepally.github.io/Kafka-Storage-Internals/
+    // where he uses kafka's DumpLogSegments tool to dump contents
+    // of the log file. In hindsight I could've also tried writing
+    // a log file by producing a message locally and then trying to
+    // parse it into RecordBatch, but for now running & analyzing
+    // the output of `codecrafters test` with debug mode enabled
+    // had to suffice!
+    pub records: CompactArray<RecordBatch>,
     pub tag_buffer: TagBuffer,
 }
 
@@ -246,7 +274,10 @@ pub struct AbortedTransaction {
 mod test {
     use super::*;
     use crate::{
-        log::test::write_test_data_to_cluster_metadata_log_file, server::tests::perform_request,
+        log::test::{
+            write_test_data_to_cluster_metadata_log_file, write_test_data_to_partition_log_file,
+        },
+        server::tests::perform_request,
     };
     use anyhow::Result;
 
@@ -259,7 +290,6 @@ mod test {
         let fetch_response = perform_fetch_request(TOPICS.to_vec())?;
 
         // Then
-        dbg!(&fetch_response);
         assert_eq!(fetch_response.throttle_time_ms, 0);
         assert_eq!(fetch_response.session_id, 0);
         assert_eq!(fetch_response.responses.length, 0);
@@ -276,7 +306,6 @@ mod test {
         let fetch_response = perform_fetch_request(TOPICS.to_vec())?;
 
         // Then
-        dbg!(&fetch_response);
         assert_eq!(fetch_response.throttle_time_ms, 0);
         assert_eq!(fetch_response.session_id, 0);
         assert_eq!(fetch_response.responses.length, 1);
@@ -292,26 +321,15 @@ mod test {
     fn test_fetch_v16_empty_topic() -> Result<()> {
         // Given
         let record_batches = write_test_data_to_cluster_metadata_log_file()?;
-        let empty_topic_id = record_batches
-            .elements
-            .into_iter()
-            .flat_map(|record_batch| record_batch.records.elements)
-            .map(|record| record.value.message)
-            .find_map(|record_message| {
-                if let RecordMessage::TopicRecord(topic_record) = record_message {
-                    Some(topic_record.topic_id)
-                } else {
-                    None
-                }
-            })
-            .unwrap();
+        let (empty_topic_id, empty_topic_name) = select_topic_from_metadata(record_batches);
+        let partition_data: &[u8] = b"";
+        write_test_data_to_partition_log_file(&empty_topic_name, 0, &Bytes::from(partition_data))?;
         let topics = &[empty_topic_id];
 
         // When
         let fetch_response = perform_fetch_request(topics.to_vec())?;
 
         // Then
-        dbg!(&fetch_response);
         assert_eq!(fetch_response.throttle_time_ms, 0);
         assert_eq!(fetch_response.session_id, 0);
         assert_eq!(fetch_response.responses.length, 1);
@@ -321,6 +339,63 @@ mod test {
         let partition_data = &response.partitions.elements[0];
         assert_eq!(partition_data.error_code, ErrorCode::None);
         Ok(())
+    }
+
+    #[test]
+    fn test_fetch_v16_topic_with_records() -> Result<()> {
+        // Given
+        let record_batches = write_test_data_to_cluster_metadata_log_file()?;
+        let (topic_id, topic_name) = select_topic_from_metadata(record_batches);
+        let record_value = b"Hello Reverse Engineering!";
+        let partition_data_bytes: [&[u8]; 3] = [
+            b"\0\0\0\0\0\0\0\0\0\0\0R\0\0\0\0\x02\x8b\xaa\x87*\0\0\0\0\0\0\0\0\x01\x91\xe0[m\x8b\0\
+            \0\x01\x91\xe0[m\x8b\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01@\0\0\0\x014",
+            record_value,
+            b"\0",
+        ];
+        let partition_data = partition_data_bytes.concat();
+        write_test_data_to_partition_log_file(&topic_name, 0, &Bytes::from(partition_data))?;
+        let topics = &[topic_id];
+
+        // When
+        let mut fetch_response = perform_fetch_request(topics.to_vec())?;
+
+        // Then
+        assert_eq!(fetch_response.throttle_time_ms, 0);
+        assert_eq!(fetch_response.session_id, 0);
+        assert_eq!(fetch_response.responses.length, 1);
+        let mut response = fetch_response.responses.elements.remove(0);
+        assert_eq!(response.topic_id, topic_id);
+        assert_eq!(response.partitions.length, 1);
+        let mut partition_data = response.partitions.elements.remove(0);
+        assert_eq!(&partition_data.error_code, &ErrorCode::None);
+        let value = partition_data
+            .records
+            .elements
+            .remove(0)
+            .records
+            .elements
+            .remove(0)
+            .value
+            .into_inner()
+            .raw_record_value()
+            .unwrap();
+        assert_eq!(&value, &record_value[..]);
+        Ok(())
+    }
+
+    fn select_topic_from_metadata(record_batches: Contiguous<RecordBatch>) -> (uuid::Uuid, Bytes) {
+        record_batches
+            .metadata_record_messages()
+            .into_iter()
+            .find_map(|record_message| {
+                if let MetadataRecordMessage::TopicRecord(topic_record) = record_message {
+                    Some((topic_record.topic_id, topic_record.name.value.unwrap()))
+                } else {
+                    None
+                }
+            })
+            .unwrap()
     }
 
     fn perform_fetch_request(topics: Vec<Uuid>) -> Result<FetchResponse> {

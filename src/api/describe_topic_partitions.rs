@@ -1,11 +1,11 @@
 use std::collections::HashMap;
-use std::path::Path;
 
 use super::{RequestMessageV2, ResponsePayload};
 use crate::api::{ApiKind, KafkaBrokerApi};
 use crate::buf::{self, BufExt as _, BufMutExt as _};
 use crate::log::{
-    read_records, PartitionRecord, RecordMessage, TopicRecord, CLUSTER_METADATA_PATH,
+    read_metadata_records, MetadataRecordMessage, PartitionRecord, TopicRecord,
+    CLUSTER_METADATA_PATH,
 };
 use crate::model::*;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -48,23 +48,20 @@ fn validate(request_message: &RequestMessageV2) -> Option<ErrorCode> {
 fn create_response(
     request: DescribeTopicPartitionsRequest,
 ) -> Result<DescribeTopicPartitionsResponse> {
-    let record_batches = read_records(Path::new(CLUSTER_METADATA_PATH)).map_err(|e| {
+    let metadata_records = read_metadata_records().map_err(|e| {
         println!("Failed reading cluster metadata file from {CLUSTER_METADATA_PATH}: {e}");
         ErrorCode::UnknownServerError
     })?;
 
     let mut topic_records = HashMap::new();
     let mut topic_wise_partition_records = HashMap::new();
-    #[expect(
-        clippy::match_wildcard_for_single_variants,
-        reason = "we only care about topic and partition records"
-    )]
-    record_batches
-        .elements
-        .into_iter()
-        .flat_map(|record_batch| record_batch.records.elements.into_iter())
-        .for_each(|record| match record.value.message {
-            RecordMessage::TopicRecord(topic_record) => {
+    for record_message in metadata_records {
+        #[expect(
+            clippy::match_wildcard_for_single_variants,
+            reason = "we only care about topic and partition records"
+        )]
+        match record_message {
+            MetadataRecordMessage::TopicRecord(topic_record) => {
                 let topic_name = topic_record
                     .name
                     .value
@@ -73,14 +70,15 @@ fn create_response(
                     .clone();
                 topic_records.insert(topic_name, topic_record);
             }
-            RecordMessage::PartitionRecord(partition_record) => {
+            MetadataRecordMessage::PartitionRecord(partition_record) => {
                 topic_wise_partition_records
                     .entry(partition_record.topic_id)
                     .or_insert_with(Vec::new)
                     .push(partition_record);
             }
             _ => (),
-        });
+        }
+    }
 
     let topics_response = request
         .topics

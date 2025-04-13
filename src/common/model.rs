@@ -243,6 +243,12 @@ pub struct Varnum<T>(T);
 pub type Varint = Varnum<i32>;
 pub type Varlong = Varnum<i64>;
 
+impl<T> Varnum<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
 impl<NType> Encode for Varnum<NType>
 where
     NType: ops::Shl<Output = NType>
@@ -388,6 +394,61 @@ impl_decode_int!(i64);
 // TODO: Separate this into another type?
 pub type CompactBytes = CompactString;
 pub type VarintBytes = VarintArray<u8>;
+
+#[derive(Debug, Default)]
+pub struct VarintSized<V>(Option<V>);
+
+impl<V> VarintSized<V> {
+    /// # Panics
+    /// Panics if inner is not present
+    pub fn into_inner(self) -> V {
+        self.0.expect("inner should be present")
+    }
+}
+
+impl<V> From<V> for VarintSized<V> {
+    fn from(value: V) -> Self {
+        Self(Some(value))
+    }
+}
+
+impl<V: Encode> Encode for VarintSized<V> {
+    fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
+        let Some(value) = &self.0 else {
+            buf.put_encoded(&Varnum(-1_i32));
+            return;
+        };
+        // We need to write length first, so encode in a new buffer to get the length
+        let mut bytes = BytesMut::new();
+        bytes.put_encoded(value);
+        let bytes = bytes.freeze();
+        let len = bytes.len();
+        buf.put_encoded(&Varnum(
+            i32::try_from(len).expect("Varint len should fit in i32"),
+        ));
+        buf.put_encoded(&bytes);
+    }
+}
+
+// INFO: Not providing this impl as it requires implementing Decode for values of V which are
+// dependent on the size, which can be dangerous as such implementations will assume that the bytes
+// being passed to them are theirs to consume. These could then be used without being wrapped by
+// VarintSized, leading to issues. It is therefore better to directly implement Decode for concrete
+// values of V
+// impl<V: Decode> Decode for VarintSized<V> {
+//     fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
+//         let length: Varint = buf.get_decoded();
+//         let length = length.0;
+//         if length <= 0 {
+//             return Self(None);
+//         }
+//         // Read length bytes as we need to decode only that many bytes
+//         let mut length_buf =
+//             buf.copy_to_bytes(usize::try_from(length).expect("varint len should fit in usize"));
+//         let value = length_buf.get_decoded();
+//         Self(Some(value))
+//     }
+// }
 
 #[derive(Debug, Default)]
 pub struct CompactString {
