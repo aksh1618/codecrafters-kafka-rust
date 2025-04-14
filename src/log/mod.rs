@@ -111,11 +111,56 @@ impl From<MetadataRecordKind> for MetadataRecordApiKey {
 impl TryFrom<MetadataRecordApiKey> for MetadataRecordKind {
     type Error = ErrorCode;
 
+    #[expect(clippy::panic_in_result_fn, reason = "assertion")]
     fn try_from(api_key: MetadataRecordApiKey) -> Result<Self> {
+        #[expect(clippy::integer_division, reason = "fine here")]
+        let current_max = u8::MAX / 2;
+        assert!(
+            api_key < current_max,
+            "Need to refactor MetadataRecordApiKey to be UnsignedVarint"
+        );
         Self::from_repr(api_key).ok_or_else(|| {
             eprintln!("Unknown record api key: {api_key}");
             ErrorCode::InvalidRequest
         })
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct CompactRecords {
+    pub record_batches: RecordBatches,
+}
+
+impl buf::Encode for CompactRecords {
+    fn encode<B: BufMut + ?Sized>(&self, mut buf: &mut B) {
+        let mut temp_buf = BytesMut::new();
+        temp_buf.put_encoded(&self.record_batches);
+        let temp_buf = temp_buf.freeze();
+        // let len = temp_buf.len() as u8;
+        // dbg!(&len);
+        // buf.put_encoded(&(len + 1));
+        let internal_rep = CompactNullableBytes::from(temp_buf);
+        buf.put_encoded(&internal_rep);
+        // buf.put_encoded(&temp_buf);
+    }
+}
+
+impl buf::Decode for CompactRecords {
+    fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
+        // let len = buf.get_u8() - 1;
+        // let mut bytes = buf.copy_to_bytes(len as usize);
+        // let record_batches: RecordBatches = bytes.get_decoded();
+        let internal_rep: CompactNullableBytes = buf.get_decoded();
+        let record_batches = internal_rep
+            .value
+            .map_or_else(RecordBatches::default, |mut bytes| bytes.get_decoded());
+        Self { record_batches }
+    }
+}
+
+impl From<RecordBatches> for CompactRecords {
+    fn from(record_batches: RecordBatches) -> Self {
+        Self { record_batches }
     }
 }
 
@@ -230,7 +275,7 @@ impl buf::Encode for RecordValue {
 impl buf::Decode for VarintSized<RecordValue> {
     fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
         let value_length: Varint = buf.get_decoded();
-        let probably_data_frame_version: UnsignedVarint = buf.get_decoded();
+        let probably_data_frame_version: u8 = buf.get_decoded();
         let probably_api_key: MetadataRecordApiKey = buf.get_decoded();
         let record_kind = MetadataRecordKind::try_from(probably_api_key);
         if let Ok(record_kind) = record_kind {
@@ -268,13 +313,24 @@ impl buf::Decode for VarintSized<RecordValue> {
 
 #[derive(Debug, Default)]
 pub struct MetadataRecordValue {
-    pub data_frame_version: UnsignedVarint,
+    // NOTE: This should be UnsignedVarint ideally, but breaks the decode implementation as in case of
+    // raw record as well we try to parse data frame version, which when decoded as an unsigned
+    // varint leads to an arbitrary number of bytes getting read, sometimes more than there are!
+    //
+    // WARN: Although the current versioin is hardcoded to 1 in Kafka, this will fail once the version
+    // crosses (u8::max / 2), as the varint encoding will kick in
+    //
+    // TODO: Refactor decoding logic and then move this back to being an UnsignedVarint
+    pub data_frame_version: u8,
     pub api_key: MetadataRecordApiKey,
     pub version: UnsignedVarint,
     pub message: MetadataRecordMessage,
 }
 
-pub type MetadataRecordApiKey = UnsignedVarint;
+// NOTE: Should be UnsignedVarint ideally, but breaks the repr convenience implementation!
+// WARN: This will fail silently when the api key crosses (u8::max / 2)
+// TODO: Refactor repr dependent logic and change this back to being an UnsignedVarint
+pub type MetadataRecordApiKey = u8;
 
 #[derive(Debug, Default, Encode, Decode)]
 pub struct RecordHeader {

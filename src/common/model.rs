@@ -176,25 +176,21 @@ impl<Item: Decode> Decode for VarintArray<Item> {
 
 #[derive(Debug, Default)]
 pub struct CompactArray<Item> {
-    pub length: UnsignedVarint,
     pub elements: Vec<Item>,
 }
 
 // TODO: Add null array case
 impl<T> From<Vec<T>> for CompactArray<T> {
     fn from(value: Vec<T>) -> Self {
-        Self {
-            length: UnsignedVarint::try_from(value.len()).expect(
-                "Arrays should be smaller than i8::max in length, probably time to refactor",
-            ),
-            elements: value,
-        }
+        Self { elements: value }
     }
 }
 
 impl<Item: Encode> Encode for CompactArray<Item> {
     fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
-        buf.put_u8(self.length + 1);
+        let length = u64::try_from(self.elements.len() + 1)
+            .expect("Arrays should be smaller than u64::max in length");
+        buf.put_encoded::<UnsignedVarint>(&length.into());
         for x in &self.elements {
             buf.put_encoded(x);
         }
@@ -203,12 +199,17 @@ impl<Item: Encode> Encode for CompactArray<Item> {
 
 impl<Item: Decode> Decode for CompactArray<Item> {
     fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
-        let length = buf.get_u8().saturating_sub(1);
-        let mut elements = Vec::with_capacity(length as usize);
+        let length = buf
+            .get_decoded::<UnsignedVarint>()
+            .inner()
+            .saturating_sub(1)
+            .try_into()
+            .expect("Compact array length should be less than usize::max");
+        let mut elements = Vec::with_capacity(length);
         for _ in 0..length {
             elements.push(buf.get_decoded());
         }
-        Self { length, elements }
+        Self { elements }
     }
 }
 
@@ -238,32 +239,136 @@ impl Decode for Uuid {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct Varnum<T>(T);
-pub type Varint = Varnum<i32>;
-pub type Varlong = Varnum<i64>;
+/// Poor man's trait for numbers
+/// Mainly created for use in generic bounds
+pub trait Number:
+    ops::Shl<Output = Self>
+    + ops::Shr<Output = Self>
+    + ops::BitXor<Output = Self>
+    + ops::BitAnd<Output = Self>
+    + ops::BitOr<Output = Self>
+    + ops::Add<Output = Self>
+    + ops::Sub<Output = Self>
+    + From<u8>
+    + TryInto<u8>
+    + PartialOrd
+    + Ord
+    + Copy
+    + Clone
+    + PartialEq
+    + Eq
+    + fmt::Display
+    + fmt::Debug
+    + fmt::Binary
+{
+}
 
-impl<T> Varnum<T> {
-    pub fn into_inner(self) -> T {
+/// Signed numbers for numbers that can be negated
+pub trait SignedNumber: Number + ops::Neg<Output = Self> {}
+
+/// All signed numbers are numbers
+impl<SN: SignedNumber> Number for SN {}
+
+#[derive(Debug, Default)]
+pub struct UnsignedVarnum<N: Number>(N);
+
+impl Number for u64 {}
+pub type UnsignedVarint = UnsignedVarnum<u64>;
+
+impl<N: Number> From<N> for UnsignedVarnum<N> {
+    fn from(value: N) -> Self {
+        Self(value)
+    }
+}
+
+impl<N: Number> UnsignedVarnum<N> {
+    pub const fn inner(&self) -> N {
         self.0
     }
 }
 
-impl<NType> Encode for Varnum<NType>
+impl<N> Encode for UnsignedVarnum<N>
 where
-    NType: ops::Shl<Output = NType>
-        + ops::Shr<Output = NType>
-        + ops::BitXor<Output = NType>
-        + From<u8>
-        + TryInto<u8>
-        + PartialOrd
-        + Ord
-        + Copy,
-    <NType as TryInto<u8>>::Error: fmt::Debug,
+    N: Number,
+    <N as TryInto<u8>>::Error: fmt::Debug,
+{
+    fn encode<T: BufMut + ?Sized>(&self, buf: &mut T) {
+        //          10010110  // Original number: 150
+        //  0000001  0010110  // Split into 7-bit segments
+        // 00000001 10010110  // Add continuation bits
+        // 10010110 00000001  // Encode as big endian (right to left)
+        let mut n = self.0;
+        loop {
+            // We'll go from right to left as the final encoding has to be big-endian
+            // Take right-most 7 bits
+            let segment = n & 0b0111_1111.into();
+            let segment: u8 = segment
+                .try_into()
+                .expect("One segment of Ntype should fit in u8");
+            // Discard the right-most 7 bits
+            n = n >> 7.into();
+            // If there are no more bits left then we're done
+            if n == 0.into() {
+                // Encode the last segment
+                buf.put_u8(segment);
+                // And we're done
+                break;
+            }
+            // Set the continuation bit as there are more segments
+            let segment = segment | 0b1000_0000;
+            println!("Encoding {:032b}, segment: {:08b}", self.0, segment);
+            buf.put_u8(segment);
+        }
+    }
+}
+
+impl<N: Number> Decode for UnsignedVarnum<N> {
+    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
+        let mut segments = vec![];
+        loop {
+            let segment = buf.get_u8();
+            segments.push(segment);
+            if segment & 0b1000_0000 == 0 {
+                // No continuation bit
+                break;
+            }
+        }
+
+        // 10010110 00000001        // Segments.
+        //  0010110  0000001        // Drop continuation bits.
+        //  0000001  0010110        // Convert to big-endian.
+        //    00000010010110        // Concatenate.
+        //  128 + 16 + 4 + 2 = 150  // Interpret as an unsigned 64-bit integer.
+        let mut n = N::from(0u8);
+        for segment in segments.iter().rev() {
+            n = (n << 7.into()) + N::from(*segment & 0b0111_1111);
+        }
+        Self(n)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Varnum<SN: SignedNumber>(SN);
+
+impl SignedNumber for i32 {}
+pub type Varint = Varnum<i32>;
+impl SignedNumber for i64 {}
+pub type Varlong = Varnum<i64>;
+
+impl<SN: SignedNumber> Varnum<SN> {
+    pub const fn into_inner(self) -> SN {
+        self.0
+    }
+}
+
+impl<SN> Encode for Varnum<SN>
+where
+    SN: SignedNumber,
+    <SN as TryInto<u8>>::Error: fmt::Debug,
 {
     fn encode<T: BufMut + ?Sized>(&self, buf: &mut T) {
         let n = self.0;
-        let bytes = u8::try_from(size_of::<NType>())
+        let bytes = u8::try_from(size_of::<SN>())
             .expect("NType should be a numeric type, with size less than or equal to 5");
         let shift: u8 = (bytes * 8) - 1;
         // n = -2        :   11111111 11111111 11111111 11111110
@@ -300,18 +405,7 @@ where
     clippy::shadow_unrelated,
     reason = "shadowing used for step-wise numeric operations"
 )]
-impl<NType> Decode for Varnum<NType>
-where
-    NType: ops::Shl<Output = NType>
-        + ops::Shr<Output = NType>
-        + ops::BitXor<Output = NType>
-        + ops::BitAnd<Output = NType>
-        + ops::Add<Output = NType>
-        + ops::Neg<Output = NType>
-        + From<u8>
-        + fmt::Debug
-        + Copy,
-{
+impl<SN: SignedNumber> Decode for Varnum<SN> {
     fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
         let mut segments = vec![];
         loop {
@@ -328,9 +422,9 @@ where
         //  0000001  0010110        // Convert to big-endian.
         //    00000010010110        // Concatenate.
         //  128 + 16 + 4 + 2 = 150  // Interpret as an unsigned 64-bit integer.
-        let mut n = NType::from(0u8);
+        let mut n = SN::from(0u8);
         for segment in segments.iter().rev() {
-            n = (n << 7.into()) + NType::from(*segment & 0b0111_1111);
+            n = (n << 7.into()) + SN::from(*segment & 0b0111_1111);
         }
 
         let n_zig_zag = n;
@@ -339,8 +433,6 @@ where
     }
 }
 
-// TODO: Make this actually unsigned varint
-pub type UnsignedVarint = u8;
 // TODO: Make this actually TagBuffer, see https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=120722234#KIP482:TheKafkaProtocolshouldSupportOptionalTaggedFields-Serialization
 pub type TagBuffer = i8;
 // TODO: Is this beneficial? Should we use newtype instead of alias?
@@ -393,6 +485,7 @@ impl_decode_int!(i64);
 
 // TODO: Separate this into another type?
 pub type CompactBytes = CompactString;
+pub type CompactNullableBytes = CompactNullableString;
 pub type VarintBytes = VarintArray<u8>;
 
 #[derive(Debug, Default)]
@@ -452,38 +545,41 @@ impl<V: Encode> Encode for VarintSized<V> {
 
 #[derive(Debug, Default)]
 pub struct CompactString {
-    pub length: UnsignedVarint,
-    pub value: Option<Bytes>,
+    pub value: Bytes,
 }
 
 impl Encode for CompactString {
     fn encode<B: BufMut + ?Sized>(&self, mut buf: &mut B) {
-        buf.put_encoded(&(self.length + 1));
+        // The length is encoded as 1 if the string is empty
+        let length = u64::try_from(self.value.len() + 1)
+            .expect("Compact strings should be smaller than u64::max in length");
+        buf.put_encoded::<UnsignedVarint>(&length.into());
         buf.put_encoded(&self.value);
     }
 }
 
 impl Decode for CompactString {
-    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
-        let length = buf.get_u8().saturating_sub(1);
+    fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
+        let length = buf
+            .get_decoded::<UnsignedVarint>()
+            .inner()
+            .saturating_sub(1)
+            .try_into()
+            .expect("Compact string length should be less than usize::max");
         if length == 0 {
             return Self {
-                length: 0,
-                value: Some(Bytes::new()),
+                value: Bytes::new(),
             };
         }
-        let value = Some(buf.copy_to_bytes(length.into()));
-        Self { length, value }
+        let value = buf.copy_to_bytes(length);
+        Self { value }
     }
 }
 
 impl From<&str> for CompactString {
     fn from(value: &str) -> Self {
         Self {
-            length: UnsignedVarint::try_from(value.len()).expect(
-                "Strings should be smaller than u8::max in length, probably time to refactor",
-            ),
-            value: Some(Bytes::from(value.to_string())),
+            value: Bytes::from(value.to_string()),
         }
     }
 }
@@ -528,39 +624,38 @@ impl From<&str> for NullableString {
 
 #[derive(Debug, Default)]
 pub struct CompactNullableString {
-    pub length: UnsignedVarint,
     pub value: Option<Bytes>,
 }
 
 impl From<Bytes> for CompactNullableString {
     fn from(value: Bytes) -> Self {
-        Self {
-            length: UnsignedVarint::try_from(value.len()).expect(
-                "Strings should be smaller than u8::max in length, probably time to refactor",
-            ),
-            value: Some(value),
-        }
+        Self { value: Some(value) }
     }
 }
 
 impl Encode for CompactNullableString {
     fn encode<T: BufMut + ?Sized>(&self, mut buf: &mut T) {
-        buf.put_u8(self.length + 1);
+        // The length is encoded as 0 if the string is empty, i.e. null
+        let length = u64::try_from(self.value.as_ref().map_or(0, |x| x.len() + 1))
+            .expect("Compact nullable strings should be smaller than u64::max in length");
+        buf.put_encoded::<UnsignedVarint>(&length.into());
         buf.put_encoded(&self.value);
     }
 }
 
 impl Decode for CompactNullableString {
-    fn decode<B: Buf + ?Sized>(buf: &mut B) -> Self {
-        let length = buf.get_u8().saturating_sub(1);
+    fn decode<B: Buf + ?Sized>(mut buf: &mut B) -> Self {
+        let length = buf
+            .get_decoded::<UnsignedVarint>()
+            .inner()
+            .saturating_sub(1)
+            .try_into()
+            .expect("Compact nullable string length should be less than usize::max");
         if length == 0 {
-            return Self {
-                length: 0,
-                value: None,
-            };
+            return Self { value: None };
         }
-        let value = Some(buf.copy_to_bytes(length.into()));
-        Self { length, value }
+        let value = Some(buf.copy_to_bytes(length));
+        Self { value }
     }
 }
 

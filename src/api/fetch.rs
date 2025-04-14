@@ -7,7 +7,7 @@ use super::{RequestMessageV2, ResponsePayload};
 use crate::api::{ApiKind, KafkaBrokerApi};
 use crate::buf::{BufExt as _, BufMutExt as _};
 use crate::log::{
-    read_metadata_records, read_raw_records, MetadataRecordMessage, RecordBatch,
+    read_metadata_records, read_raw_records, CompactRecords, MetadataRecordMessage,
     CLUSTER_METADATA_PATH,
 };
 use crate::model::*;
@@ -38,9 +38,7 @@ impl KafkaBrokerApi for FetchV16 {
         for record in metadata_records {
             // Soft TODO: if-let-chains?!
             if let MetadataRecordMessage::TopicRecord(topic_record) = record {
-                if let Some(topic_name) = &topic_record.name.value {
-                    topic_names.insert(topic_record.topic_id, topic_name.clone());
-                }
+                topic_names.insert(topic_record.topic_id, topic_record.name.value);
             }
         }
 
@@ -111,7 +109,7 @@ fn get_partition_response_for_topic_and_partition(
         }
         Ok(record_batches) => record_batches,
     };
-    let records = record_batches.elements.into();
+    let records = record_batches.into();
     PartitionData {
         records,
         ..Default::default()
@@ -224,7 +222,7 @@ pub struct PartitionData {
     // parse it into RecordBatch, but for now running & analyzing
     // the output of `codecrafters test` with debug mode enabled
     // had to suffice!
-    pub records: CompactArray<RecordBatch>,
+    pub records: CompactRecords,
     pub tag_buffer: TagBuffer,
 }
 
@@ -274,8 +272,11 @@ pub struct AbortedTransaction {
 mod test {
     use super::*;
     use crate::{
-        log::test::{
-            write_test_data_to_cluster_metadata_log_file, write_test_data_to_partition_log_file,
+        log::{
+            test::{
+                write_test_data_to_cluster_metadata_log_file, write_test_data_to_partition_log_file,
+            },
+            RecordBatch,
         },
         server::tests::perform_request,
     };
@@ -292,7 +293,7 @@ mod test {
         // Then
         assert_eq!(fetch_response.throttle_time_ms, 0);
         assert_eq!(fetch_response.session_id, 0);
-        assert_eq!(fetch_response.responses.length, 0);
+        assert_eq!(fetch_response.responses.elements.len(), 0);
         Ok(())
     }
 
@@ -308,10 +309,10 @@ mod test {
         // Then
         assert_eq!(fetch_response.throttle_time_ms, 0);
         assert_eq!(fetch_response.session_id, 0);
-        assert_eq!(fetch_response.responses.length, 1);
+        assert_eq!(fetch_response.responses.elements.len(), 1);
         let response = &fetch_response.responses.elements[0];
         assert_eq!(response.topic_id, UNKNOWN_TOPIC_ID);
-        assert_eq!(response.partitions.length, 1);
+        assert_eq!(response.partitions.elements.len(), 1);
         let partition_data = &response.partitions.elements[0];
         assert_eq!(partition_data.error_code, ErrorCode::UnknownTopicId);
         Ok(())
@@ -332,17 +333,17 @@ mod test {
         // Then
         assert_eq!(fetch_response.throttle_time_ms, 0);
         assert_eq!(fetch_response.session_id, 0);
-        assert_eq!(fetch_response.responses.length, 1);
+        assert_eq!(fetch_response.responses.elements.len(), 1);
         let response = &fetch_response.responses.elements[0];
         assert_eq!(response.topic_id, empty_topic_id);
-        assert_eq!(response.partitions.length, 1);
+        assert_eq!(response.partitions.elements.len(), 1);
         let partition_data = &response.partitions.elements[0];
         assert_eq!(partition_data.error_code, ErrorCode::None);
         Ok(())
     }
 
     #[test]
-    fn test_fetch_v16_topic_with_records() -> Result<()> {
+    fn test_fetch_v16_topic_with_single_record() -> Result<()> {
         // Given
         let record_batches = write_test_data_to_cluster_metadata_log_file()?;
         let (topic_id, topic_name) = select_topic_from_metadata(record_batches);
@@ -363,14 +364,15 @@ mod test {
         // Then
         assert_eq!(fetch_response.throttle_time_ms, 0);
         assert_eq!(fetch_response.session_id, 0);
-        assert_eq!(fetch_response.responses.length, 1);
+        assert_eq!(fetch_response.responses.elements.len(), 1);
         let mut response = fetch_response.responses.elements.remove(0);
         assert_eq!(response.topic_id, topic_id);
-        assert_eq!(response.partitions.length, 1);
+        assert_eq!(response.partitions.elements.len(), 1);
         let mut partition_data = response.partitions.elements.remove(0);
         assert_eq!(&partition_data.error_code, &ErrorCode::None);
         let value = partition_data
             .records
+            .record_batches
             .elements
             .remove(0)
             .records
@@ -384,13 +386,71 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn test_fetch_v16_topic_with_multiple_records() -> Result<()> {
+        // Given
+        let record_batches = write_test_data_to_cluster_metadata_log_file()?;
+        println!("decoded metadata record_batches");
+        let (topic_id, topic_name) = select_topic_from_metadata(record_batches);
+        let first_record_value = b"Hello Earth!";
+        let second_record_value = b"Hello World!";
+        let partition_data_bytes: [&[u8]; 5] = [
+            b"\0\0\0\0\0\0\0\0\0\0\0D\0\0\0\0\x02da|J\0\0\0\0\0\0\0\0\x01\x91\xe0[m\x8b\0\0\x01\x91\
+              \xe0[m\x8b\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01$\0\0\0\x01\x18",
+            first_record_value,
+            b"\0\0\0\0\0\0\0\0\x01\0\0\0D\0\0\0\0\x02\x98\xec\x18\xd3\0\0\0\0\0\0\0\0\x01\x91\xe0[m\
+              \x8b\0\0\x01\x91\xe0[m\x8b\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01$\0\0\0\x01\x18",
+            second_record_value,
+            b"\0",
+        ];
+        let partition_data = partition_data_bytes.concat();
+        println!("Now decoding partition record_batches");
+        write_test_data_to_partition_log_file(&topic_name, 0, &Bytes::from(partition_data))?;
+        let topics = &[topic_id];
+
+        // When
+        let mut fetch_response = perform_fetch_request(topics.to_vec())?;
+
+        // Then
+        assert_eq!(fetch_response.throttle_time_ms, 0);
+        assert_eq!(fetch_response.session_id, 0);
+        assert_eq!(fetch_response.responses.elements.len(), 1);
+        let mut response = fetch_response.responses.elements.remove(0);
+        assert_eq!(response.topic_id, topic_id);
+        assert_eq!(response.partitions.elements.len(), 1);
+        let partition_data = response.partitions.elements.remove(0);
+        assert_eq!(&partition_data.error_code, &ErrorCode::None);
+        let mut record_batches = partition_data.records.record_batches.elements;
+        let first_value = record_batches
+            .remove(0)
+            .records
+            .elements
+            .remove(0)
+            .value
+            .into_inner()
+            .raw_record_value()
+            .unwrap();
+        assert_eq!(&first_value, &first_record_value[..]);
+        let second_value = record_batches
+            .remove(0)
+            .records
+            .elements
+            .remove(0)
+            .value
+            .into_inner()
+            .raw_record_value()
+            .unwrap();
+        assert_eq!(&second_value, &second_record_value[..]);
+        Ok(())
+    }
+
     fn select_topic_from_metadata(record_batches: Contiguous<RecordBatch>) -> (uuid::Uuid, Bytes) {
         record_batches
             .metadata_record_messages()
             .into_iter()
             .find_map(|record_message| {
                 if let MetadataRecordMessage::TopicRecord(topic_record) = record_message {
-                    Some((topic_record.topic_id, topic_record.name.value.unwrap()))
+                    Some((topic_record.topic_id, topic_record.name.value))
                 } else {
                     None
                 }

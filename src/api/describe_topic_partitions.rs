@@ -62,12 +62,7 @@ fn create_response(
         )]
         match record_message {
             MetadataRecordMessage::TopicRecord(topic_record) => {
-                let topic_name = topic_record
-                    .name
-                    .value
-                    .as_ref()
-                    .expect("topic name should be present in a topic record")
-                    .clone();
+                let topic_name = topic_record.name.value.clone();
                 topic_records.insert(topic_name, topic_record);
             }
             MetadataRecordMessage::PartitionRecord(partition_record) => {
@@ -85,10 +80,7 @@ fn create_response(
         .elements
         .into_iter()
         .map(|topic| {
-            let topic_name = topic
-                .name
-                .value
-                .expect("topic name should be present in a topic record");
+            let topic_name = topic.name.value;
             get_topic_response_for_topic(
                 topic_name,
                 &mut topic_records,
@@ -127,11 +119,7 @@ fn get_topic_response_for_topic_and_partitions(
 ) -> DescribeTopicPartitionsResponseTopic {
     DescribeTopicPartitionsResponseTopic {
         error_code: ErrorCode::None,
-        name: topic_record
-            .name
-            .value
-            .expect("topic name should be present in a topic record")
-            .into(),
+        name: topic_record.name.value.into(),
         topic_id: topic_record.topic_id,
         partitions: get_partition_response_for_topic(
             topic_record.topic_id,
@@ -300,12 +288,12 @@ mod test {
             perform_describe_topic_partitions_request(vec![TOPIC_NAME.to_string()])?;
 
         // Then
-        assert_eq!(describe_topic_partitions_response.topics.length, 1);
+        assert_eq!(describe_topic_partitions_response.topics.elements.len(), 1);
         let topic_details = &describe_topic_partitions_response.topics.elements[0];
         assert_eq!(topic_details.error_code, ErrorCode::UnknownTopicOrPartition);
         assert_eq!(topic_details.name.value.as_ref().unwrap(), TOPIC_NAME);
         assert_eq!(topic_details.topic_id, Uuid::nil());
-        assert_eq!(topic_details.partitions.length, 0);
+        assert_eq!(topic_details.partitions.elements.len(), 0);
         assert!(topic_details.partitions.elements.is_empty());
         Ok(())
     }
@@ -321,7 +309,7 @@ mod test {
             perform_describe_topic_partitions_request(vec![TOPIC_NAME.to_string()])?;
 
         // Then
-        assert_eq!(describe_topic_partitions_response.topics.length, 1);
+        assert_eq!(describe_topic_partitions_response.topics.elements.len(), 1);
         let topic_details = &describe_topic_partitions_response.topics.elements[0];
         // dbg!(&topic_details);
         assert_eq!(topic_details.error_code, ErrorCode::None);
@@ -330,7 +318,7 @@ mod test {
             topic_details.topic_id,
             Uuid::try_parse("00000000-0000-4000-8000-000000000053")?
         );
-        assert_eq!(topic_details.partitions.length, 2);
+        assert_eq!(topic_details.partitions.elements.len(), 2);
         topic_details
             .partitions
             .elements
@@ -358,7 +346,7 @@ mod test {
             perform_describe_topic_partitions_request(topic_names.to_vec())?;
 
         // Then
-        assert_eq!(describe_topic_partitions_response.topics.length, 2);
+        assert_eq!(describe_topic_partitions_response.topics.elements.len(), 2);
         let topic_details = &describe_topic_partitions_response.topics.elements;
         // dbg!(&topic_details);
         topic_details
@@ -371,7 +359,7 @@ mod test {
                     topic_names[i].as_str()
                 );
                 assert_eq!(topic_details.topic_id, expected_uuids[i]);
-                assert_eq!(topic_details.partitions.length, 1);
+                assert_eq!(topic_details.partitions.elements.len(), 1);
                 topic_details
                     .partitions
                     .elements
